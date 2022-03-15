@@ -9,23 +9,11 @@ import numpy as np
 from scipy import interpolate
 import numba as nb
 import xarray as xr
+import pyvista as pv
 
 
 ################################################################################
 # BarSim 2D
-
-@nb.jit(nopython=True)
-def _initialize_stratigraphy(initial_elevation, init_composition, n_time_steps):
-    """
-    Initialize the grain-size distribution of the substrate (homogeneous)
-    """
-    stratigraphy = np.zeros((len(init_composition), n_time_steps, len(initial_elevation)))
-    for i in range(stratigraphy.shape[2]):
-        for j in range(stratigraphy.shape[0]):
-            stratigraphy[j, 0, i] = initial_elevation[i]*init_composition[j]
-                         
-    return stratigraphy
-
 
 @nb.jit(nopython=True)
 def _initialize_fluxes(TDcorr_SF, TDcorr_OW, texture):
@@ -196,39 +184,38 @@ def _decompose_domain(elevation, sea_level, W, T, texture, Theta_wl):
 
 
 @nb.jit(nopython=True)
-def _classify_facies(event, i_mainland, i_backbarrier, i_coastline, i_wavebase, n_x):
+def _classify_facies(event, i_mainland, i_backbarrier, i_coastline, i_wavebase,
+                     i_wavebase_event, i_wavebase_fw, n_x):
     """
     Classifies the domain into facies.
     """
-    i_wavebase_event = 0
-    i_wavebase_fw = 0
     if event == False:
         i_wavebase_fw = i_wavebase
     else:
         i_wavebase_event = i_wavebase
 
-    # TODO: Any reason why the facies are floats and not integers?
-    facies = np.empty(n_x)
+    # TODO: Check with Joep that's ok to turn those into int
+    facies = np.empty(n_x, np.int8)
     for i in range(0, i_mainland):
         # Coastal plain
-        facies[i] = 0.2
+        facies[i] = 2
     for i in range(i_mainland, i_backbarrier):
         # Lagoon
-        facies[i] = 0.4
+        facies[i] = 3
     for i in range(i_backbarrier, i_coastline):
         # Barrier island
-        facies[i] = 0.6
+        facies[i] = 4
     for i in range(i_coastline, i_wavebase):
         # Upper shoreface
-        facies[i] = 0.8
+        facies[i] = 5
     for i in range(i_wavebase_fw, i_wavebase_event):
         # Lower shoreface
-        facies[i] = 0.3
+        facies[i] = 6
     for i in range(i_wavebase_event, len(facies)):
         # Offshore
-        facies[i] = 0.1
+        facies[i] = 7
         
-    return facies
+    return facies, i_wavebase_event, i_wavebase_fw
 
 
 @nb.jit(nopython=True)
@@ -551,6 +538,7 @@ def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
 
 @nb.jit(nopython=True)
 def _run(initial_elevation,
+         initial_substratum,
          sea_level_curve,
          sediment_supply_curve,
          duration=10000.,
@@ -578,7 +566,6 @@ def _run(initial_elevation,
          fallout_rate_sf=0.0002,
          texture=(5., 50., 125., 250.),
          texture_ratio=(0.25, 0.25, 0.25, 0.25),
-         init_composition=(0.2, 0.2, 0.3, 0.3),
          event=False,
          seed=42):
     """
@@ -595,12 +582,15 @@ def _run(initial_elevation,
     sediment_supply = np.zeros(n_time_steps)
     sediment_supply[0] = sediment_supply_curve[0, 1]
     elevation = np.zeros((n_time_steps, len(initial_elevation)))
-    elevation[0] = initial_elevation
-    stratigraphy = _initialize_stratigraphy(initial_elevation, init_composition, n_time_steps)
-    facies = np.zeros((n_time_steps, len(initial_elevation)))
+    elevation[0] = initial_elevation    
+    stratigraphy = np.zeros((len(texture), n_time_steps, len(initial_elevation)))
+    stratigraphy[:, 0] = initial_substratum
+    facies = np.ones((n_time_steps, len(initial_elevation)), np.int8)
 
     flux_shoreface_basic, flux_overwash_basic = _initialize_fluxes(TDcorr_SF, TDcorr_OW, texture)
     Theta_wl = _compute_Theta_wl(texture)
+    i_wavebase_event = 0
+    i_wavebase_fw = 0
 
     # TODO: What is that parameter? Why is it an input as well?
     event = False
@@ -621,8 +611,9 @@ def _run(initial_elevation,
         i_mainland, i_backbarrier, i_coastline, i_wavebase = _decompose_domain(elevation[i_time],
                                                                                sea_level[i_time], W, T,
                                                                                texture, Theta_wl)
-        facies[i_time] = _classify_facies(event, i_mainland, i_backbarrier, i_coastline,
-                                          i_wavebase, len(elevation[i_time]))
+        facies[i_time], i_wavebase_event, i_wavebase_fw = _classify_facies(event, i_mainland, i_backbarrier,
+                                                                           i_coastline, i_wavebase, i_wavebase_event,
+                                                                           i_wavebase_fw, len(elevation[i_time]))
         stratigraphy, erosion = _erode(elevation, stratigraphy, sea_level[i_time], erodibility,
                                        W, W_fw, i_time, i_coastline, i_wavebase)        
         elevation, stratigraphy = _deposit(elevation, stratigraphy, erosion, sediment_supply,
@@ -661,43 +652,54 @@ def _compute_median_grain_size(stratigraphy, texture):
 
 
 @nb.jit(nopython=True)
-def _regrid_stratigraphy(time_stratigraphy, z_min, z_max, z_step, l_substratum=0):
+def find_layer_bottom(stratigraphic_column, l, layer_top):
+    """
+    Find the bottom of the layer in a time-stratigraphy column.
+    """
+    layer_thickness = np.sum(stratigraphic_column[:, l])
+    while layer_thickness <= 0. and l > 0:
+        l -= 1
+        layer_thickness += np.sum(stratigraphic_column[:, l])
+    
+    return l, layer_top - layer_thickness
+
+
+@nb.jit(nopython=True)
+def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max, z_step):
     """
     Interpolate the time stratigraphy on a regular grid in space.
     """
     z_corner = np.linspace(z_min, z_max, int((z_max - z_min)/z_step) + 1)
-    region = np.zeros((len(z_corner) - 1, time_stratigraphy.shape[2]))
     stratigraphy = np.zeros((time_stratigraphy.shape[0],
                              len(z_corner) - 1,
                              time_stratigraphy.shape[2]))
+    facies = np.zeros((8, len(z_corner) - 1, time_facies.shape[1]))
     
     for i in range(time_stratigraphy.shape[2]):
-        k = 0
-        l = 0
-        layer_min = 0.
-        layer_max = np.sum(time_stratigraphy[:, 0, i])
-        while k < len(z_corner) - 1 and l < time_stratigraphy.shape[1]:
-            if (layer_max - layer_min > 0.
+        k = len(z_corner) - 2
+        l = time_stratigraphy.shape[1] - 1
+        layer_max = elevation[i]
+        l, layer_min = find_layer_bottom(time_stratigraphy[:, :, i], l, layer_max)
+        while k >= 0 and l >= 0:
+            if (layer_max - layer_min != 0.
                 and layer_min < z_corner[k + 1]
                 and z_corner[k] < layer_max):
                 ratio = (min(z_corner[k + 1], layer_max) - max(z_corner[k], layer_min))/(layer_max - layer_min)
                 stratigraphy[:, k, i] += ratio*time_stratigraphy[:, l, i]
-                if l <= l_substratum:
-                    ratio = (min(z_corner[k + 1], layer_max) - z_corner[k])/z_step
-                    region[k, i] = ratio*2 + (1 - ratio)
-                elif l < time_stratigraphy.shape[1] - 1:
-                    region[k, i] = 1
-                else:
-                    region[k, i] = (min(z_corner[k + 1], layer_max) - z_corner[k])/z_step
-            if layer_max < z_corner[k + 1]:
-                l += 1
-                layer_min = layer_max
-                if l < time_stratigraphy.shape[1]:
-                    layer_max = layer_min + np.sum(time_stratigraphy[:, l, i])
+                ratio = (min(z_corner[k + 1], layer_max) - max(z_corner[k], layer_min))/z_step
+                facies[time_facies[l, i], k, i] += ratio
+            if z_corner[k + 1] > elevation[i]:
+                facies[0, k, i] = (z_corner[k + 1] - max(elevation[i], z_corner[k]))/z_step
+            if l == 0 and z_corner[k] < layer_min:
+                facies[0, k, i] = (min(z_corner[k + 1], layer_min) - z_corner[k])/z_step
+            if l > 0 and z_corner[k] < layer_min:
+                l -= 1
+                layer_max = layer_min
+                l, layer_min = find_layer_bottom(time_stratigraphy[:, :, i], l, layer_max)
             else:
-                k += 1
-                
-    return region, stratigraphy
+                k -= 1
+
+    return stratigraphy, facies
 
 
 class BarSim2D:
@@ -760,8 +762,11 @@ class BarSim2D:
         ???
     texture_ratio : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         ???
-    init_composition : array-like of shape (n_grain_sizes,), default=(0.2, 0.2, 0.3, 0.3)
-        ???
+    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2), default=(100., (0.2, 0.2, 0.3, 0.3))
+        Initial thickness of the substratum for each grain size. It can be directly
+        an array representing the substratum, or a tuple (thickness, tuple with the
+        proportion of each grain size), which is converted into an array during
+        initialization.
     event : bool, default=False
         ???
     preinterpolate_curves: bool, default=False
@@ -774,6 +779,8 @@ class BarSim2D:
     ----------
     sequence_ : xarray.Dataset
         Dataset containing the evolution of the elevation and stratigraphy through time.
+    record_ : xarray.Dataset
+        Dataset containing the final stratigraphy.
         
     References
     ----------
@@ -806,7 +813,7 @@ class BarSim2D:
                  fallout_rate_sf=0.0002,
                  texture=(5., 50., 125., 250.),
                  texture_ratio=(0.25, 0.25, 0.25, 0.25),
-                 init_composition=(0.2, 0.2, 0.3, 0.3),
+                 initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
                  seed=42):
@@ -836,7 +843,13 @@ class BarSim2D:
         self.fallout_rate_sf = fallout_rate_sf
         self.texture = np.array(texture)
         self.texture_ratio = np.array(texture_ratio)
-        self.init_composition = np.array(init_composition)
+        if (len(initial_substratum) == 2
+            and len(initial_substratum[1]) == len(texture)):
+            self.initial_substratum = np.full((len(texture), len(initial_elevation)),
+                                              initial_substratum[0])
+            self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
+        else:
+            self.initial_substratum = np.array(initial_substratum)
         self.event = event
         self.preinterpolate_curves = preinterpolate_curves
         self.seed = seed
@@ -883,9 +896,9 @@ class BarSim2D:
             sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(duration, dt_min, dt_fw)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
-        time, sea_level, sediment_supply, elevation, stratigraphy, facies = _run(self.initial_elevation, sea_level_curve,
-                                                                                 sediment_supply_curve, duration,
-                                                                                 self.spacing, self.ow_part, self.mode,
+        time, sea_level, sediment_supply, elevation, stratigraphy, facies = _run(self.initial_elevation, self.initial_substratum,
+                                                                                 sea_level_curve, sediment_supply_curve,
+                                                                                 duration, self.spacing, self.ow_part, self.mode,
                                                                                  self.W_fw, self.W_event, dt_min, dt_fw,
                                                                                  self.Tidalampl, self.Tide_Acc_VAR,
                                                                                  self.TidalSand, self.dh_ratio_acc,
@@ -895,8 +908,7 @@ class BarSim2D:
                                                                                  self.max_height_SF, self.max_height_BB,
                                                                                  self.substrate_erosion, self.fallout_rate_bb,
                                                                                  self.fallout_rate_sf, self.texture,
-                                                                                 self.texture_ratio, self.init_composition,
-                                                                                 self.event, self.seed)
+                                                                                 self.texture_ratio, self.event, self.seed)
 
         self.sequence_ = xr.Dataset(
             data_vars={
@@ -904,7 +916,7 @@ class BarSim2D:
                 'Sediment supply': (('Time',), sediment_supply, {'units': 'cubic meter', 'description': 'sediment supply through time'}),
                 'Elevation': (('Time', 'X'), elevation, {'units': 'meter', 'description': 'elevation through time'}),
                 'Stratigraphy': (('Grain size', 'Time', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness through time'}),
-                'Facies': (('Time', 'X'), facies, {'units': '', 'description': 'facies'}),
+                'Facies': (('Time', 'X'), facies, {'units': '', 'description': 'facies: 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
             },
             coords={
                 'X': np.linspace(self.spacing/2.,
@@ -918,7 +930,7 @@ class BarSim2D:
         self.sequence_['Time'].attrs['units'] = 'year'
         self.sequence_['Grain size'].attrs['units'] = 'micrometer'
         
-    def regrid(self, z_min, z_max, z_step, l_substratum=0):
+    def regrid(self, z_min, z_max, z_step):
         """
         Interpolates the time stratigraphy into a regular grid.
 
@@ -930,27 +942,29 @@ class BarSim2D:
             Upper border of the grid.
         z_step : float
             Resolution of the grid.
-        l_substratum : int
-            Index of the upper layer of the subtratum.
         """
-        region, stratigraphy = _regrid_stratigraphy(self.sequence_['Stratigraphy'].to_numpy(),
-                                                    z_min, z_max, z_step, l_substratum=l_substratum)
+        stratigraphy, facies = _regrid_stratigraphy(self.sequence_['Elevation'][-1].to_numpy(),
+                                                    self.sequence_['Stratigraphy'].to_numpy(),
+                                                    self.sequence_['Facies'].to_numpy(),
+                                                    z_min, z_max, z_step)
         median = _compute_median_grain_size(stratigraphy, self.texture)
         
         self.record_ = xr.Dataset(
             data_vars={
-                'Region': (('Z', 'X'), region, {'units': '', 'description': 'regions of the subsurface: 0. air, 1. deposits, 2. substratum'}),
                 'Median grain size': (('Z', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
+                'Major facies': (('Z', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
                 'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness'}),
+                'Facies': (('Environment', 'Z', 'X'), facies, {'units': '', 'description': 'facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
             },
             coords={
                 'X': np.linspace(self.spacing/2.,
-                                 self.spacing*(region.shape[1] - 0.5),
-                                 region.shape[1]),
+                                 self.spacing*(median.shape[1] - 0.5),
+                                 median.shape[1]),
                 'Z': np.linspace(z_min + z_step/2.,
                                  z_max - z_step/2.,
-                                 region.shape[0]),
+                                 median.shape[0]),
                 'Grain size': self.texture,
+                'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
             },
         )
         self.record_['X'].attrs['units'] = 'meter'
@@ -962,43 +976,46 @@ class BarSim2D:
 # BarSim 2.5D
 
 @nb.jit(nopython=True, parallel=True)
-def _run_multiple(initial_elevation, sea_level_curve, sediment_supply_curve, duration,
-                  spacing, ow_part, mode, W_fw, W_event, dt_min, dt_fw, Tidalampl,
+def _run_multiple(initial_elevation, initial_substratum, sea_level_curve, sediment_supply_curve,
+                  duration, spacing, ow_part, mode, W_fw, W_event, dt_min, dt_fw, Tidalampl,
                   Tide_Acc_VAR, TidalSand, dh_ratio_acc, TDcorr_SF, TDcorr_OW,
                   erodibility, BB_max_width, A_factor_BB, A_factor_SF, max_height_SF,
                   max_height_BB, substrate_erosion, fallout_rate_bb, fallout_rate_sf,
-                  texture, texture_ratio, init_composition, event, z_min, z_max, z_step,
-                  l_substratum, seed):
+                  texture, texture_ratio, event, z_min, z_max, z_step, seed):
     
     stratigraphy = np.empty((len(texture),
                              int((z_max - z_min)/z_step),
                              initial_elevation.shape[0],
                              initial_elevation.shape[1]))
-    region = np.empty((int((z_max - z_min)/z_step),
+    facies = np.empty((8,
+                       int((z_max - z_min)/z_step),
                        initial_elevation.shape[0],
                        initial_elevation.shape[1]))
     median = np.empty((int((z_max - z_min)/z_step),
                        initial_elevation.shape[0],
                        initial_elevation.shape[1]))
+    major_facies = np.empty((int((z_max - z_min)/z_step),
+                             initial_elevation.shape[0],
+                             initial_elevation.shape[1]))
     for i in nb.prange(initial_elevation.shape[0]):
-        _, _, _, _, time_stratigraphy, _ = _run(initial_elevation[i], sea_level_curve,
-                                                sediment_supply_curve[i], duration,
-                                                spacing, ow_part, mode,
-                                                W_fw, W_event, dt_min, dt_fw,
-                                                Tidalampl, Tide_Acc_VAR,
-                                                TidalSand, dh_ratio_acc,
-                                                TDcorr_SF, TDcorr_OW,
-                                                erodibility, BB_max_width,
-                                                A_factor_BB, A_factor_SF,
-                                                max_height_SF, max_height_BB,
-                                                substrate_erosion, fallout_rate_bb,
-                                                fallout_rate_sf, texture,
-                                                texture_ratio, init_composition,
-                                                event, seed)
-        region[..., i], stratigraphy[..., i] = _regrid_stratigraphy(time_stratigraphy, z_min, z_max, z_step, l_substratum)
+        _, _, _, elevation, time_stratigraphy, time_facies = _run(initial_elevation[i], initial_substratum,
+                                                                  sea_level_curve, sediment_supply_curve[i],
+                                                                  duration, spacing, ow_part, mode,
+                                                                  W_fw, W_event, dt_min, dt_fw,
+                                                                  Tidalampl, Tide_Acc_VAR,
+                                                                  TidalSand, dh_ratio_acc,
+                                                                  TDcorr_SF, TDcorr_OW,
+                                                                  erodibility, BB_max_width,
+                                                                  A_factor_BB, A_factor_SF,
+                                                                  max_height_SF, max_height_BB,
+                                                                  substrate_erosion, fallout_rate_bb,
+                                                                  fallout_rate_sf, texture,
+                                                                  texture_ratio, event, seed)
+        stratigraphy[..., i], facies[..., i] = _regrid_stratigraphy(elevation[-1], time_stratigraphy,
+                                                                    time_facies, z_min, z_max, z_step)
         median[..., i] = _compute_median_grain_size(stratigraphy[..., i], texture)
         
-    return region, stratigraphy, median
+    return stratigraphy, facies, median
 
 
 class BarSimPseudo3D:
@@ -1061,8 +1078,11 @@ class BarSimPseudo3D:
         ???
     texture_ratio : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         ???
-    init_composition : array-like of shape (n_grain_sizes,), default=(0.2, 0.2, 0.3, 0.3)
-        ???
+    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2), default=(100., (0.2, 0.2, 0.3, 0.3))
+        Initial thickness of the substratum for each grain size. It can be directly
+        an array representing the substratum, or a tuple (thickness, tuple with the
+        proportion of each grain size), which is converted into an array during
+        initialization.
     event : bool, default=False
         ???
     preinterpolate_curves: bool, default=False
@@ -1107,7 +1127,7 @@ class BarSimPseudo3D:
                  fallout_rate_sf=0.0002,
                  texture=(5., 50., 125., 250.),
                  texture_ratio=(0.25, 0.25, 0.25, 0.25),
-                 init_composition=(0.2, 0.2, 0.3, 0.3),
+                 initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
                  n_jobs=-1,
@@ -1138,7 +1158,13 @@ class BarSimPseudo3D:
         self.fallout_rate_sf = fallout_rate_sf
         self.texture = np.array(texture)
         self.texture_ratio = np.array(texture_ratio)
-        self.init_composition = np.array(init_composition)
+        if (len(initial_substratum) == 2
+            and len(initial_substratum[1]) == len(texture)):
+            self.initial_substratum = np.full((len(texture), len(initial_elevation)),
+                                              initial_substratum[0])
+            self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
+        else:
+            self.initial_substratum = np.array(initial_substratum)
         self.event = event
         self.preinterpolate_curves = preinterpolate_curves
         self.n_jobs = n_jobs
@@ -1170,7 +1196,7 @@ class BarSimPseudo3D:
         
         return sea_level_interp, sediment_supply_interp
     
-    def run(self, z_min, z_max, z_step, duration=10000., dt_min=1., dt_fw=15., l_substratum=0):
+    def run(self, z_min, z_max, z_step, duration=10000., dt_min=1., dt_fw=15.):
         """
         Runs BarSim for a given duration.
 
@@ -1187,34 +1213,66 @@ class BarSimPseudo3D:
             sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(duration, dt_min, dt_fw)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
-        region, stratigraphy, median = _run_multiple(self.initial_elevation, sea_level_curve, sediment_supply_curve, duration,
-                                                      self.spacing[1], self.ow_part, self.mode, self.W_fw, self.W_event, dt_min, dt_fw, self.Tidalampl,
-                                                      self.Tide_Acc_VAR, self.TidalSand, self.dh_ratio_acc, self.TDcorr_SF, self.TDcorr_OW,
-                                                      self.erodibility, self.BB_max_width, self.A_factor_BB, self.A_factor_SF, self.max_height_SF,
-                                                      self.max_height_BB, self.substrate_erosion, self.fallout_rate_bb, self.fallout_rate_sf,
-                                                      self.texture, self.texture_ratio, self.init_composition, self.event, z_min, z_max, z_step,
-                                                      l_substratum, self.seed)
+        stratigraphy, facies, median = _run_multiple(self.initial_elevation, self.initial_substratum, sea_level_curve,
+                                                     sediment_supply_curve, duration, self.spacing[1], self.ow_part,
+                                                     self.mode, self.W_fw, self.W_event, dt_min, dt_fw, self.Tidalampl,
+                                                     self.Tide_Acc_VAR, self.TidalSand, self.dh_ratio_acc, self.TDcorr_SF,
+                                                     self.TDcorr_OW, self.erodibility, self.BB_max_width, self.A_factor_BB,
+                                                     self.A_factor_SF, self.max_height_SF, self.max_height_BB, self.substrate_erosion,
+                                                     self.fallout_rate_bb, self.fallout_rate_sf, self.texture, self.texture_ratio,
+                                                     self.event, z_min, z_max, z_step, self.seed)
 
         self.record_ = xr.Dataset(
             data_vars={
-                'Region': (('Z', 'Y', 'X'), region, {'units': '', 'description': 'regions of the subsurface: 0. air, 1. deposits, 2. substratum'}),
                 'Median grain size': (('Z', 'Y', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
+                'Major facies': (('Z', 'Y', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
                 'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness'}),
+                'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '', 'description': 'facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
             },
             coords={
                 'X': np.linspace(self.spacing[1]/2.,
-                                 self.spacing[1]*(region.shape[2] - 0.5),
-                                 region.shape[2]),
+                                 self.spacing[1]*(median.shape[2] - 0.5),
+                                 median.shape[2]),
                 'Y': np.linspace(self.spacing[0]/2.,
-                                 self.spacing[0]*(region.shape[1] - 0.5),
-                                 region.shape[1]),
+                                 self.spacing[0]*(median.shape[1] - 0.5),
+                                 median.shape[1]),
                 'Z': np.linspace(z_min + z_step/2.,
                                  z_max - z_step/2.,
-                                 region.shape[0]),
+                                 median.shape[0]),
                 'Grain size': self.texture,
+                'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
             },
         )
         self.record_['X'].attrs['units'] = 'meter'
         self.record_['Y'].attrs['units'] = 'meter'
         self.record_['Z'].attrs['units'] = 'meter'
         self.record_['Grain size'].attrs['units'] = 'micrometer'
+        
+    def mesh(self, zscale=1.):
+        """
+        Turns record_ into a PyVista mesh object.
+        
+        Parameters
+        ----------
+        zscale : float, default=1.
+            Vertical scale factor.
+        """
+        x = self.record_['X'].to_numpy().copy()
+        x -= (x[1] - x[0])/2
+        x = np.append(x, x[-1] + (x[1] - x[0]))
+        y = self.record_['Y'].to_numpy().copy()
+        y -= (y[1] - y[0])/2
+        y = np.append(y, y[-1] + (y[1] - y[0]))
+        z = self.record_['Z'].to_numpy().copy()
+        z -= (z[1] - z[0])/2
+        z = np.append(z, z[-1] + (z[1] - z[0]))
+        xx, yy, zz = np.meshgrid(x, y, zscale*z)
+        mesh = pv.StructuredGrid(xx, yy, zz)
+        median = self.record_['Median grain size'].to_numpy().copy()
+        median[(self.record_['Facies'][0] == 1) | (self.record_['Facies'][1] == 1)] = np.nan
+        mesh['Median grain size'] = median.ravel()
+        major_facies = self.record_['Major facies'].to_numpy().astype(float)
+        major_facies[(self.record_['Facies'][0] > 0) | (self.record_['Facies'][1] > 0)] = np.nan
+        mesh['Major facies'] = major_facies.ravel()
+        
+        return mesh
