@@ -1,4 +1,4 @@
-"""Setup for the pybarsim package
+"""Setup for the pyBarSim package
 
 See:
 https://github.com/pypa/sampleproject/blob/master/setup.py
@@ -18,7 +18,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
-    name='pybarsim',
+    name='pyBarSim',
     version='v0.0.1',
     description='Python package to simulate wave-dominated shallow-marine environments',
     long_description=long_description,

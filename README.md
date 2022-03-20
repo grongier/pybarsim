@@ -1,10 +1,10 @@
-# pybarsim
+# pyBarSim
 
-pybarsim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
+pyBarSim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
 
 ## Installation
 
-You can directly install pybarsim from GitLab using pip:
+You can directly install pyBarSim from GitLab using pip:
 
     pip install git+https://gitlab.tudelft.nl/grongier/pybarsim.git
 
@@ -34,7 +34,7 @@ For a more complete example, see the Jupyter notebook [using_pybarsim.ipynb](exa
 
 ## Citation
 
-If you use pybarsim in your research, please cite the original article:
+If you use pyBarSim in your research, please cite the original article:
 
 > Storms, J.E.A. (2003). Event-based stratigraphic simulation of wave-dominated shallow-marine environments. *Marine Geology*, 199(1), 83-100. doi:10.1016/S0025-3227(03)00144-0
 
