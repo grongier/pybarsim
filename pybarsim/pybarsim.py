@@ -226,46 +226,39 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
     n_grain_sizes = stratigraphy.shape[0]
     erosion = np.zeros((n_grain_sizes, len(erosion_total)))
     for i in range(i_coastline, i_wavebase + 1):
-        erosion_sum = 0.
-        sum_strat = np.zeros(n_grain_sizes)
-        
-        stratigraphy_total = 0.
+
+        layer_thickness = 0.
         for j in range(n_grain_sizes):
-            stratigraphy_total += stratigraphy[j, i_time - 1, i]
+            layer_thickness += stratigraphy[j, i_time - 1, i]
 
-        if erosion_total[i] > stratigraphy_total:
-            k = 1
-            while erosion_total[i] >= erosion_sum:
-                for j in range(n_grain_sizes):
-                    sum_strat[j] += stratigraphy[j, i_time - k, i]
-                for j in range(n_grain_sizes):
-                    erosion_sum += stratigraphy[j, i_time - k, i]
-                k += 1
-            tmp = k - 1
-
-            stratigraphy_total_tmp = 0.
-            for j in range(n_grain_sizes):
-                stratigraphy_total_tmp += stratigraphy[j, i_time - tmp, i]
+        if erosion_total[i] > layer_thickness:
             
-            fraction_left = (erosion_sum - erosion_total[i])/stratigraphy_total_tmp
-
-            for k in range(tmp): # CHECK THIS LINE tmp OR tmp-1???
+            erosion_sum = 0.
+            sum_strat = np.zeros(n_grain_sizes)
+            t = 0
+            while erosion_total[i] > erosion_sum:
+                t += 1
                 for j in range(n_grain_sizes):
-                    stratigraphy[j, i_time - k, i] = 0.
+                    erosion_sum += stratigraphy[j, i_time - t, i]
+                    sum_strat[j] += stratigraphy[j, i_time - t, i]
 
+            last_layer_thickness = 0.
             for j in range(n_grain_sizes):
-                stratigraphy[j, i_time - tmp, i] *= fraction_left
-
+                last_layer_thickness += stratigraphy[j, i_time - t, i]
+            
+            fraction_left = (erosion_sum - erosion_total[i])/last_layer_thickness
+            for l in range(1, t): # CHECK THIS LINE tmp OR tmp-1???
+                for j in range(n_grain_sizes):
+                    stratigraphy[j, i_time - l, i] = 0.
             for j in range(n_grain_sizes):
-                erosion[j, i] = sum_strat[j] - stratigraphy[j, i_time - tmp, i]
+                stratigraphy[j, i_time - t, i] *= fraction_left
+                erosion[j, i] = sum_strat[j] - stratigraphy[j, i_time - t, i]
 
         else:
-            # TODO: What is stratigraphy_total is equal to 0?
-            fraction_left = erosion_total[i]/stratigraphy_total
+            # TODO: What if layer_thickness is equal to 0?
+            fraction_left = erosion_total[i]/layer_thickness
             for j in range(n_grain_sizes):
                 erosion[j, i] = fraction_left*stratigraphy[j, i_time - 1, i]
-
-            for j in range(n_grain_sizes):
                 stratigraphy[j, i_time - 1, i] *= (1 - fraction_left)
 
     return stratigraphy, erosion
@@ -298,7 +291,7 @@ def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, ow_p
     total_flux = np.zeros(n_grain_sizes)
     for i in range(i_coastline, i_wavebase + 1):
         for j in range(n_grain_sizes): 
-            total_flux[j] += erosion[j, i]*spacing   
+            total_flux[j] += erosion[j, i]*spacing
     for j in range(n_grain_sizes):
         total_flux[j] += sediment_supply*texture_ratio[j]*dt
 
@@ -308,8 +301,8 @@ def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, ow_p
         and i_coastline - i_mainland > 0
         and (i_coastline - i_backbarrier)*spacing < BB_max_width
         and sea_level >= sea_level_prev
-        and ow_part > 0): 
-        for j in range (2, n_grain_sizes):    #NOTE!! ASSUME GRAINSIZE 3 and 4 ARE SAND
+        and ow_part > 0.): 
+        for j in range(2, n_grain_sizes):    #NOTE!! ASSUME GRAINSIZE 3 and 4 ARE SAND
             total_flux_washover[j] = ow_part*total_flux[j]
         for j in range(n_grain_sizes):
             total_flux_shoreface[j] = total_flux[j] - total_flux_washover[j]
@@ -331,7 +324,7 @@ def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
         and i_coastline - i_mainland > 0
         and (i_coastline - i_backbarrier)*spacing < BB_max_width
         and sea_level >= sea_level_prev
-        and ow_part > 0):
+        and ow_part > 0.):
         for j in range(2, n_grain_sizes):
             sediment_flux[j, i_coastline - 1] = total_flux_washover[j]
 
@@ -341,11 +334,7 @@ def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
             f_add = np.zeros(n_grain_sizes)
             for j in range(2, n_grain_sizes):
                 f_add[j] = flux_overwash[j]*(1. + 2.71828283**(H_norm*A_factor_BB))
-
-            for j in range(2, n_grain_sizes):
-                 sediment_flux[j, i - 1] = sediment_flux[j, i] - sediment_flux[j, i]*spacing/f_add[j]
-
-            for j in range(2, n_grain_sizes):    
+                sediment_flux[j, i - 1] = sediment_flux[j, i] - sediment_flux[j, i]*spacing/f_add[j]  
                 deposition_washover[j, i] = (sediment_flux[j, i] - sediment_flux[j, i - 1])/spacing
                 
     return sediment_flux, deposition_washover
@@ -363,12 +352,12 @@ def _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_le
         and i_coastline - i_mainland > 0
         and (i_coastline - i_backbarrier)*spacing < BB_max_width
         and sea_level >= sea_level_prev
-        and ow_part > 0):
+        and ow_part > 0.):
         for j in range(n_grain_sizes):
             sediment_flux[j, i_coastline] = sediment_flux[j, i_mainland] + total_flux_shoreface[j]
     else:
         for j in range(n_grain_sizes):
-            sediment_flux[j, i_coastline] = total_flux[j] 
+            sediment_flux[j, i_coastline] = total_flux[j]
         
     return sediment_flux
 
@@ -392,21 +381,25 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, Tid
         
         deposition_tidal_sum = 0.
         BB_acc = 0
+        # TODO: should that be changed for not taking into account if sea_level - elevation[i_time, i] <= 0?
+        len_backbarrier = 0
         # Determine backbarrier accommodation
-        for i in range(i_backbarrier, i_mainland, -1):
-            BB_acc = BB_acc + (sea_level - elevation[i_time, i])*spacing
+        for i in range(i_backbarrier - 1, i_mainland, -1):
+            if sea_level - elevation[i_time, i] > 0.:
+                BB_acc += (sea_level - elevation[i_time, i])*spacing
+                len_backbarrier += 1
         # Minimum tidal basin size: USE ASMITA HERE? Area that is wet is 
         # proportional to the Tidal Amplitude. Also assume minimal hydraulic
         # gradient befor tidal processes become active
-        if BB_acc < Tidalampl*spacing*(i_mainland - i_backbarrier) + Tide_Acc_VAR:
+        if BB_acc < Tide_Acc_VAR - Tidalampl*spacing*len_backbarrier:
             tidal_supply = False
         else:
             tidal_supply = True
             
         # Max deposition rate based on Tidal amplitude, Backbarrier width and
         # time step, limited by total sediment flux
-        if (tidal_supply == True and Tidalampl > 0):
-            dh_Tidal_cap = (i_backbarrier - i_mainland)*spacing*Tidalampl*dt*0.001 # 1 is tuning parameter
+        if tidal_supply == True and Tidalampl > 0:
+            dh_Tidal_cap = len_backbarrier*spacing*Tidalampl*dt*0.001 # 1 is tuning parameter
 
             if (dh_Tidal_cap > sediment_flux_total):
                 dh_Tidal_cap = sediment_flux_total
@@ -425,23 +418,25 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, Tid
             deposition_tidal_sum = 0.0000001 # Prevent dividing by zero negative sediment supply
 
         # Deposition finest fraction
-        for i in range(i_backbarrier, i_mainland, -1):
-            for j in range(n_grain_sizes - 2):
-                deposition_tidal[j, i] = dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[j]/deposition_tidal_sum #grain size distribution tidal deposits (sum should be 1)
-            # Coarsest fraction less
-            deposition_tidal[n_grain_sizes - 1, i] = TidalSand*dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[n_grain_sizes - 1]/deposition_tidal_sum   #grain size distribution tidal deposits (sum should be 1)
-
+        for i in range(i_backbarrier - 1, i_mainland, -1):
+            if sea_level - elevation[i_time, i] > 0.:
+                for j in range(n_grain_sizes - 2):
+                    deposition_tidal[j, i] = dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[j]/deposition_tidal_sum #grain size distribution tidal deposits (sum should be 1)
+                # Coarsest fraction less
+                deposition_tidal[n_grain_sizes - 1, i] = TidalSand*dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[n_grain_sizes - 1]/deposition_tidal_sum   #grain size distribution tidal deposits (sum should be 1)
+            
             # Leftover sediment for SHOREFACE deposition
             for j in range(n_grain_sizes):
                 sediment_flux[j, i_coastline] -= deposition_tidal[j, i]*spacing
 
     # Update layer thickness (dh) and cellheight and assign remaining sediment for shoreface sedimentation
     if (fallout_rate_bb > 0):
-        for i in range(i_backbarrier, i_mainland, -1): #fallout rate in backbarrier (organics + fines)
-            if fallout_rate_bb*dt < (sea_level - elevation[i_time, i]):                 #in case of accommodation
-                deposition_washover[0, i] += fallout_rate_bb*dt
-            else:
-                deposition_washover[0, i] += (sea_level - elevation[i_time, i]) #no BB deposition above SL
+        for i in range(i_backbarrier - 1, i_mainland, -1): #fallout rate in backbarrier (organics + fines)
+            if sea_level - elevation[i_time, i] > 0.:
+                if fallout_rate_bb*dt < (sea_level - elevation[i_time, i]):                 #in case of accommodation
+                    deposition_washover[0, i] += fallout_rate_bb*dt
+                else:
+                    deposition_washover[0, i] += (sea_level - elevation[i_time, i]) #no BB deposition above SL
             
     return sediment_flux, deposition_washover, deposition_tidal
 
@@ -473,7 +468,7 @@ def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level, max_
 def _update_elevation(elevation, erosion, deposition_washover, deposition_tidal,
                       deposition_shoreface, i_time, i_mainland):
     """
-    Deposits the stratigraphic record.
+    Updates the topography following erosion and deposition.
     """
     for i in range(i_mainland, elevation.shape[1]):    
         for j in range(erosion.shape[0]):
@@ -641,9 +636,7 @@ def _compute_median_grain_size(stratigraphy, texture):
     median = np.zeros(stratigraphy.shape[1:])
     for k in range(stratigraphy.shape[1]):
         for i in range(stratigraphy.shape[2]):
-            stratigraphy_total = 0.
-            for j in range(stratigraphy.shape[0]):
-                stratigraphy_total += stratigraphy[j, k, i]
+            stratigraphy_total = np.sum(stratigraphy[:, k, i])
             if stratigraphy_total > 0.:
                 for j in range(stratigraphy.shape[0]):
                     median[k, i] += texture[j]*stratigraphy[j, k, i]/stratigraphy_total
@@ -652,22 +645,9 @@ def _compute_median_grain_size(stratigraphy, texture):
 
 
 @nb.jit(nopython=True)
-def find_layer_bottom(stratigraphic_column, l, layer_top):
-    """
-    Find the bottom of the layer in a time-stratigraphy column.
-    """
-    layer_thickness = np.sum(stratigraphic_column[:, l])
-    while layer_thickness <= 0. and l > 0:
-        l -= 1
-        layer_thickness += np.sum(stratigraphic_column[:, l])
-    
-    return l, layer_top - layer_thickness
-
-
-@nb.jit(nopython=True)
 def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max, z_step):
     """
-    Interpolate the time stratigraphy on a regular grid in space.
+    Interpolates the time stratigraphy on a regular grid in space.
     """
     z_corner = np.linspace(z_min, z_max, int((z_max - z_min)/z_step) + 1)
     stratigraphy = np.zeros((time_stratigraphy.shape[0],
@@ -678,24 +658,24 @@ def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max
     for i in range(time_stratigraphy.shape[2]):
         k = len(z_corner) - 2
         l = time_stratigraphy.shape[1] - 1
-        layer_max = elevation[i]
-        l, layer_min = find_layer_bottom(time_stratigraphy[:, :, i], l, layer_max)
+        layer_top = elevation[i]
+        layer_bottom = layer_top - np.sum(time_stratigraphy[:, l, i])
         while k >= 0 and l >= 0:
-            if (layer_max - layer_min != 0.
-                and layer_min < z_corner[k + 1]
-                and z_corner[k] < layer_max):
-                ratio = (min(z_corner[k + 1], layer_max) - max(z_corner[k], layer_min))/(layer_max - layer_min)
+            if (layer_top > layer_bottom
+                and layer_bottom < z_corner[k + 1]
+                and z_corner[k] < layer_top):
+                ratio = (min(z_corner[k + 1], layer_top) - max(z_corner[k], layer_bottom))/(layer_top - layer_bottom)
                 stratigraphy[:, k, i] += ratio*time_stratigraphy[:, l, i]
-                ratio = (min(z_corner[k + 1], layer_max) - max(z_corner[k], layer_min))/z_step
+                ratio = (min(z_corner[k + 1], layer_top) - max(z_corner[k], layer_bottom))/z_step
                 facies[time_facies[l, i], k, i] += ratio
             if z_corner[k + 1] > elevation[i]:
                 facies[0, k, i] = (z_corner[k + 1] - max(elevation[i], z_corner[k]))/z_step
-            if l == 0 and z_corner[k] < layer_min:
-                facies[0, k, i] = (min(z_corner[k + 1], layer_min) - z_corner[k])/z_step
-            if l > 0 and z_corner[k] < layer_min:
+            if l == 0 and z_corner[k] < layer_bottom:
+                facies[0, k, i] = (min(z_corner[k + 1], layer_bottom) - z_corner[k])/z_step
+            if l > 0 and z_corner[k] < layer_bottom:
                 l -= 1
-                layer_max = layer_min
-                l, layer_min = find_layer_bottom(time_stratigraphy[:, :, i], l, layer_max)
+                layer_top = layer_bottom
+                layer_bottom = layer_top - np.sum(time_stratigraphy[:, l, i])
             else:
                 k -= 1
 
@@ -916,7 +896,7 @@ class BarSim2D:
                 'Sediment supply': (('Time',), sediment_supply, {'units': 'cubic meter', 'description': 'sediment supply through time'}),
                 'Elevation': (('Time', 'X'), elevation, {'units': 'meter', 'description': 'elevation through time'}),
                 'Stratigraphy': (('Grain size', 'Time', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness through time'}),
-                'Facies': (('Time', 'X'), facies, {'units': '', 'description': 'facies: 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
+                'Facies': (('Time', 'X'), facies, {'units': '', 'description': 'facies through time: 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
             },
             coords={
                 'X': np.linspace(self.spacing/2.,
@@ -953,8 +933,8 @@ class BarSim2D:
             data_vars={
                 'Median grain size': (('Z', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness'}),
-                'Facies': (('Environment', 'Z', 'X'), facies, {'units': '', 'description': 'facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
+                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
+                'Facies': (('Environment', 'Z', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
                 'X': np.linspace(self.spacing/2.,
@@ -1226,8 +1206,8 @@ class BarSimPseudo3D:
             data_vars={
                 'Median grain size': (('Z', 'Y', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'Y', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy, {'units': 'meter', 'description': 'deposit thickness'}),
-                'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '', 'description': 'facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
+                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
+                'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
                 'X': np.linspace(self.spacing[1]/2.,
