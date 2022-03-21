@@ -750,8 +750,10 @@ class BarSim2D:
     event : bool, default=False
         ???
     preinterpolate_curves: bool, default=False
-        If True, preinterpolate the sea level and sediment supply curves using
-        a cubic interpolation.
+        If True, preinterpolate the sea level and sediment supply curves.
+    monotonic: bool, default=True
+        If True, uses a monotonic interpolation for sea level and sediment supply,
+        otherwise uses a cubic interpolation.
     seed : int, default=42
         Controls random number generation for reproductibility.
 
@@ -796,6 +798,7 @@ class BarSim2D:
                  initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
+                 monotonic=True,
                  seed=42):
         
         self.initial_elevation = np.array(initial_elevation)
@@ -832,6 +835,7 @@ class BarSim2D:
             self.initial_substratum = np.array(initial_substratum)
         self.event = event
         self.preinterpolate_curves = preinterpolate_curves
+        self.monotonic = monotonic
         self.seed = seed
         
     def _preinterpolate_curves(self, duration, dt_min, dt_fw):
@@ -843,16 +847,22 @@ class BarSim2D:
         dt_average = (dt_min + dt_fw)//2 - 1 if self.mode == 2 else dt_min
         n_time_steps = int(duration/dt_average) + 1
         
-        sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
-                                                  self.sea_level_curve[:, 1],
-                                                  kind='cubic')
+        if self.monotonic == False:
+            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
+                                                      self.sea_level_curve[:, 1],
+                                                      kind='cubic')
+            sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[:, 0],
+                                                            self.sediment_supply_curve[:, 1],
+                                                            kind='cubic')
+        else:
+            sea_level_function = interpolate.PchipInterpolator(self.sea_level_curve[:, 0],
+                                                               self.sea_level_curve[:, 1])
+            sediment_supply_function = interpolate.PchipInterpolator(self.sediment_supply_curve[:, 0],
+                                                                     self.sediment_supply_curve[:, 1])
+            
         sea_level_interp = np.empty((n_time_steps, 2))
         sea_level_interp[:, 0] = np.linspace(0., duration, n_time_steps)
         sea_level_interp[:, 1] = sea_level_function(sea_level_interp[:, 0])
-        
-        sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[:, 0],
-                                                        self.sediment_supply_curve[:, 1],
-                                                        kind='cubic')
         sediment_supply_interp = np.empty((n_time_steps, 2))
         sediment_supply_interp[:, 0] = sea_level_interp[:, 0]
         sediment_supply_interp[:, 1] = sediment_supply_function(sediment_supply_interp[:, 0])
@@ -933,8 +943,8 @@ class BarSim2D:
             data_vars={
                 'Median grain size': (('Z', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy/z_step, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
-                'Facies': (('Environment', 'Z', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
+                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy/z_step, {'units': '-', 'description': 'fraction of each grain size in a cell'}),
+                'Facies': (('Environment', 'Z', 'X'), facies, {'units': '-', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
                 'X': np.linspace(self.spacing/2.,
@@ -1066,8 +1076,10 @@ class BarSimPseudo3D:
     event : bool, default=False
         ???
     preinterpolate_curves: bool, default=False
-        If True, preinterpolate the sea level and sediment supply curves using
-        a cubic interpolation.
+        If True, preinterpolate the sea level and sediment supply curves.
+    monotonic: bool, default=True
+        If True, uses a monotonic interpolation for sea level and sediment supply,
+        otherwise uses a cubic interpolation.
     seed : int, default=42
         Controls random number generation for reproductibility.
 
@@ -1110,6 +1122,7 @@ class BarSimPseudo3D:
                  initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
+                 monotonic=True,
                  n_jobs=-1,
                  seed=42):
         
@@ -1147,6 +1160,7 @@ class BarSimPseudo3D:
             self.initial_substratum = np.array(initial_substratum)
         self.event = event
         self.preinterpolate_curves = preinterpolate_curves
+        self.monotonic = monotonic
         self.n_jobs = n_jobs
         self.seed = seed
         
@@ -1159,18 +1173,26 @@ class BarSimPseudo3D:
         dt_average = (dt_min + dt_fw)//2 - 1 if self.mode == 2 else dt_min
         n_time_steps = int(duration/dt_average) + 1
         
-        sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
-                                                  self.sea_level_curve[:, 1],
-                                                  kind='cubic')
+        if self.monotonic == False:
+            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
+                                                      self.sea_level_curve[:, 1],
+                                                      kind='cubic')
+        else:
+            sea_level_function = interpolate.PchipInterpolator(self.sea_level_curve[:, 0],
+                                                               self.sea_level_curve[:, 1])
         sea_level_interp = np.empty((n_time_steps, 2))
         sea_level_interp[:, 0] = np.linspace(0., duration, n_time_steps)
         sea_level_interp[:, 1] = sea_level_function(sea_level_interp[:, 0])
         
         sediment_supply_interp = np.empty((len(self.sediment_supply_curve), n_time_steps, 2))
         for i in range(len(self.sediment_supply_curve)):
-            sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[i, :, 0],
-                                                            self.sediment_supply_curve[i, :, 1],
-                                                            kind='cubic')
+            if self.monotonic == False:
+                sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[i, :, 0],
+                                                                self.sediment_supply_curve[i, :, 1],
+                                                                kind='cubic')
+            else:
+                sediment_supply_function = interpolate.PchipInterpolator(self.sediment_supply_curve[i, :, 0],
+                                                                         self.sediment_supply_curve[i, :, 1])
             sediment_supply_interp[i, :, 0] = sea_level_interp[:, 0]
             sediment_supply_interp[i, :, 1] = sediment_supply_function(sediment_supply_interp[i, :, 0])
         
@@ -1206,8 +1228,8 @@ class BarSimPseudo3D:
             data_vars={
                 'Median grain size': (('Z', 'Y', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'Y', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy/z_step, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
-                'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
+                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy/z_step, {'units': '-', 'description': 'fraction of each grain size in a cell'}),
+                'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '-', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
                 'X': np.linspace(self.spacing[1]/2.,
