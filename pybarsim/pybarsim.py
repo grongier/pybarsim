@@ -933,7 +933,7 @@ class BarSim2D:
             data_vars={
                 'Median grain size': (('Z', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
+                'Stratigraphy': (('Grain size', 'Z', 'X'), stratigraphy/z_step, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
                 'Facies': (('Environment', 'Z', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
@@ -1206,7 +1206,7 @@ class BarSimPseudo3D:
             data_vars={
                 'Median grain size': (('Z', 'Y', 'X'), median, {'units': 'micrometer', 'description': 'median grain size'}),
                 'Major facies': (('Z', 'Y', 'X'), np.argmax(facies, axis=0), {'units': '', 'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'}),
-                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
+                'Stratigraphy': (('Grain size', 'Z', 'Y', 'X'), stratigraphy/z_step, {'units': 'meter', 'description': 'fraction of each grain size in a cell'}),
                 'Facies': (('Environment', 'Z', 'Y', 'X'), facies, {'units': '', 'description': 'fraction of each facies in a cell'}),
             },
             coords={
