@@ -40,7 +40,7 @@ setup(
     keywords='stratigraphic modeling, shallow-marine, event-based',
     packages=find_packages(),
     python_requires=">=3.7",
-    install_requires=['numpy', 'scipy', 'numba', 'xarray', 'pyvista'],
+    install_requires=['pyvista', 'xarray', 'scipy', 'numba', 'numpy'],
     project_urls={  # Optional
         'Reference': 'https://doi.org/10.1016/S0025-3227(03)00144-0',
         'Source': 'https://gitlab.tudelft.nl/grongier/pybarsim',
