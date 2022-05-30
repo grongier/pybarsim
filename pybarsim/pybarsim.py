@@ -1041,8 +1041,8 @@ def _run_multiple(initial_elevation, initial_substratum, sea_level_curve, sedime
                                                                   substrate_erosion, fallout_rate_bb,
                                                                   fallout_rate_sf, texture,
                                                                   texture_ratio, event, seed)
-        stratigraphy[..., i], facies[..., i] = _regrid_stratigraphy(elevation[-1], time_stratigraphy,
-                                                                    time_facies, z_min, z_max, z_step)
+        stratigraphy[:, :, i], facies[:, :, i] = _regrid_stratigraphy(elevation[-1], time_stratigraphy,
+                                                                      time_facies, z_min, z_max, z_step)
         
     return stratigraphy, facies
 
@@ -1208,7 +1208,7 @@ class BarSimPseudo3D:
         self.texture_ratio = np.array(texture_ratio)
         if (len(initial_substratum) == 2
             and len(initial_substratum[1]) == len(texture)):
-            self.initial_substratum = np.full((len(texture), len(initial_elevation)),
+            self.initial_substratum = np.full((len(texture), initial_elevation.shape[1]),
                                               initial_substratum[0])
             self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
         else:
@@ -1334,15 +1334,15 @@ class BarSimPseudo3D:
             Vertical scale factor.
         """
         x = self.record_['X'].to_numpy().copy()
-        x -= (x[1] - x[0])/2
+        x -= (x[1] - x[0])/2.
         x = np.append(x, x[-1] + (x[1] - x[0]))
         y = self.record_['Y'].to_numpy().copy()
-        y -= (y[1] - y[0])/2
+        y -= (y[1] - y[0])/2.
         y = np.append(y, y[-1] + (y[1] - y[0]))
         z = self.record_['Z'].to_numpy().copy()
-        z -= (z[1] - z[0])/2
+        z -= (z[1] - z[0])/2.
         z = np.append(z, z[-1] + (z[1] - z[0]))
-        xx, yy, zz = np.meshgrid(x, y, zscale*z)
+        xx, yy, zz = np.meshgrid(x, y, zscale*z, indexing='ij')
         mesh = pv.StructuredGrid(xx, yy, zz)
         median = self.record_['Mean grain size'].to_numpy().copy()
         median[(self.record_['Facies'][0] == 1) | (self.record_['Facies'][1] == 1)] = np.nan
