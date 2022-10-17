@@ -16,30 +16,30 @@ import pyvista as pv
 # BarSim 2D
 
 @nb.jit(nopython=True)
-def _initialize_fluxes(TDcorr_SF, TDcorr_OW, texture):
+def _initialize_fluxes(TDcorr_SF, TDcorr_OW, sediment_size):
     """
     Adopted from Guillen and Hoekstra 1996, 1997, but slightly different (this
     is only for the >0.125mm fraction)
     """
-    flux_shoreface_basic = np.zeros(len(texture))
-    flux_overwash_basic = np.zeros(len(texture))
-    for j in range (len(texture)):
-        flux_shoreface_basic[j] = TDcorr_SF * (110 + 590 * ((0.125 / (texture[j] * 0.001)) ** 2.5))
-        flux_overwash_basic[j] = TDcorr_OW * (110 + 590 * ((0.125 / (texture[j] * 0.001)) ** 2.5))
+    flux_shoreface_basic = np.zeros(len(sediment_size))
+    flux_overwash_basic = np.zeros(len(sediment_size))
+    for j in range (len(sediment_size)):
+        flux_shoreface_basic[j] = TDcorr_SF * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
+        flux_overwash_basic[j] = TDcorr_OW * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
         
     return flux_shoreface_basic, flux_overwash_basic
 
 
 @nb.jit(nopython=True)
-def _compute_Theta_wl(texture):
+def _compute_Theta_wl(sediment_size):
     """
     TODO: Rewrite this function, not great
     """
-    Dd = np.zeros(len(texture))
-    for j in range(len(texture)):
-        Dd[j] = (texture[j]/1000) * (1 * 981 * 2 / 0.01**2)**(1/3)    
-    Wd = np.zeros(len(texture))
-    for j in range(len(texture)):
+    Dd = np.zeros(len(sediment_size))
+    for j in range(len(sediment_size)):
+        Dd[j] = (sediment_size[j]/1000) * (1 * 981 * 2 / 0.01**2)**(1/3)    
+    Wd = np.zeros(len(sediment_size))
+    for j in range(len(sediment_size)):
         # TODO: Need some "=<" or ">="
         if Dd[j] < 1.2538:
             Wd[j] = 0.2354 * Dd[j]**2
@@ -51,8 +51,8 @@ def _compute_Theta_wl(texture):
             Wd[j] = (0.8255*Dd[j] - 5.4)**(2/3)
         if 134.9215 < Dd[j] < 1750.:
             Wd[j] = (2.531*Dd[j] + 160)**0.5
-    Theta_wl = np.zeros(len(texture))
-    for j in range(len(texture)):
+    Theta_wl = np.zeros(len(sediment_size))
+    for j in range(len(sediment_size)):
         if Wd[j] > 0:
             Theta_wl[j] = 0.0246 * Wd[j]**(-0.55)
                          
@@ -90,7 +90,7 @@ def _correct_travel_distance(mode, event, flux_shoreface_basic, flux_overwash_ba
 def _event(mode, event, time, W_event, W_fw, dt_min, dt_fw, flux_shoreface_basic,
            flux_overwash_basic, n_grain_sizes):
     """
-    Event appraoch
+    Event approach
     TODO: What is this function doing?
     """
     if mode == 1: #no events
@@ -123,7 +123,7 @@ def _event(mode, event, time, W_event, W_fw, dt_min, dt_fw, flux_shoreface_basic
 
 
 @nb.jit(nopython=True)
-def _compute_orbital_velocity(elevation, sea_level, W, T, Theta_wl, texture, i_coastline):
+def _compute_orbital_velocity(elevation, sea_level, W, T, Theta_wl, sediment_size, i_coastline):
     """
     Computes the actual horizontal orbital velocity (m/s) based on Komar, Beach
     processes, 2nd edition, p163 and 164 and the max. horizontal orbital velocity
@@ -142,15 +142,15 @@ def _compute_orbital_velocity(elevation, sea_level, W, T, Theta_wl, texture, i_c
                 orbital_velocity[i] = 3.1428*W/num
     orbital_velocity[i_coastline] = 20 # what is this number?
 
-    orbital_velocity_max = np.zeros(len(texture) + 1)
-    for i in range(len(texture)):
-        orbital_velocity_max[i] = (-0.01 * ((Theta_wl[i] * 981 * texture[i] * 0.0001 * 2) ** 2 / (1 * 0.01 / T)) + 1.3416 * ((Theta_wl[i] * 981 * texture[i] * 0.0001 * 2) / ((1 * 0.01) / T) ** 0.5) - 0.6485) / 100.
+    orbital_velocity_max = np.zeros(len(sediment_size) + 1)
+    for i in range(len(sediment_size)):
+        orbital_velocity_max[i] = (-0.01 * ((Theta_wl[i] * 981 * sediment_size[i] * 0.0001 * 2) ** 2 / (1 * 0.01 / T)) + 1.3416 * ((Theta_wl[i] * 981 * sediment_size[i] * 0.0001 * 2) / ((1 * 0.01) / T) ** 0.5) - 0.6485) / 100.
         
     return orbital_velocity, orbital_velocity_max
 
 
 @nb.jit(nopython=True)
-def _decompose_domain(elevation, sea_level, W, T, texture, Theta_wl):
+def _decompose_domain(elevation, sea_level, W, T, sediment_size, Theta_wl):
     """
     Decomposes the domain by returning the indices of the mainland, the backbarrier,
     the coastline, and the wave base.
@@ -175,7 +175,7 @@ def _decompose_domain(elevation, sea_level, W, T, texture, Theta_wl):
             
     i_wavebase = len(elevation) - 1 # Wint to Wdeep intersection (may be too deep)
     orbital_velocity, orbital_velocity_max = _compute_orbital_velocity(elevation, sea_level,
-                                                                       W, T, Theta_wl, texture,
+                                                                       W, T, Theta_wl, sediment_size,
                                                                        i_coastline)
     while orbital_velocity[i_wavebase] <= orbital_velocity_max[0] and i_wavebase > 0:  #for the finest fraction
         i_wavebase -= 1
@@ -282,18 +282,18 @@ def _erode(elevation, stratigraphy, sea_level, erodibility, W, W_fw, i_time,
 
 @nb.jit(nopython=True)
 def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, ow_part,
-                       BB_max_width, texture_ratio, i_mainland, i_backbarrier,
+                       BB_max_width, sediment_fraction, i_mainland, i_backbarrier,
                        i_coastline, i_wavebase, dt, spacing):
     """
     Distributes the fluxes along the domain.
     """
-    n_grain_sizes = len(texture_ratio)
+    n_grain_sizes = len(sediment_fraction)
     total_flux = np.zeros(n_grain_sizes)
     for i in range(i_coastline, i_wavebase + 1):
         for j in range(n_grain_sizes): 
             total_flux[j] += erosion[j, i]*spacing
     for j in range(n_grain_sizes):
-        total_flux[j] += sediment_supply*texture_ratio[j]*dt
+        total_flux[j] += sediment_supply*sediment_fraction[j]*dt
 
     total_flux_washover = np.zeros(n_grain_sizes)
     total_flux_shoreface = np.zeros(n_grain_sizes)
@@ -495,14 +495,14 @@ def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
              flux_shoreface, sea_level, ow_part, BB_max_width, A_factor_BB,
              max_height_BB, Tidalampl, Tide_Acc_VAR, TidalSand, fallout_rate_bb,
              max_height_SF, fallout_rate_sf, A_factor_SF, dh_ratio_acc, event,
-             texture_ratio, i_time, i_mainland, i_backbarrier, i_coastline,
+             sediment_fraction, i_time, i_mainland, i_backbarrier, i_coastline,
              i_wavebase, dt, spacing):
     """
     Deposits sediments in the domain.
     """
     total_flux, total_flux_washover, total_flux_shoreface = _distribute_fluxes(erosion, sediment_supply[i_time],
                                                                                sea_level[i_time], sea_level[i_time - 1],
-                                                                               ow_part, BB_max_width, texture_ratio,
+                                                                               ow_part, BB_max_width, sediment_fraction,
                                                                                i_mainland, i_backbarrier,
                                                                                i_coastline, i_wavebase,
                                                                                dt, spacing)
@@ -559,8 +559,8 @@ def _run(initial_elevation,
          substrate_erosion=1,
          fallout_rate_bb=0.,
          fallout_rate_sf=0.0002,
-         texture=(5., 50., 125., 250.),
-         texture_ratio=(0.25, 0.25, 0.25, 0.25),
+         sediment_size=(5., 50., 125., 250.),
+         sediment_fraction=(0.25, 0.25, 0.25, 0.25),
          event=False,
          seed=42):
     """
@@ -578,12 +578,12 @@ def _run(initial_elevation,
     sediment_supply[0] = sediment_supply_curve[0, 1]
     elevation = np.zeros((n_time_steps, len(initial_elevation)))
     elevation[0] = initial_elevation    
-    stratigraphy = np.zeros((len(texture), n_time_steps, len(initial_elevation)))
+    stratigraphy = np.zeros((len(sediment_size), n_time_steps, len(initial_elevation)))
     stratigraphy[:, 0] = initial_substratum
     facies = np.ones((n_time_steps, len(initial_elevation)), np.int8)
 
-    flux_shoreface_basic, flux_overwash_basic = _initialize_fluxes(TDcorr_SF, TDcorr_OW, texture)
-    Theta_wl = _compute_Theta_wl(texture)
+    flux_shoreface_basic, flux_overwash_basic = _initialize_fluxes(TDcorr_SF, TDcorr_OW, sediment_size)
+    Theta_wl = _compute_Theta_wl(sediment_size)
     i_wavebase_event = 0
     i_wavebase_fw = 0
 
@@ -593,7 +593,7 @@ def _run(initial_elevation,
     i_time = 1
     while time[i_time - 1] < duration:
         
-        W, T, dt, time[i_time], flux_shoreface, flux_overwash = _event(mode, event, time[i_time - 1], W_event, W_fw, dt_min, dt_fw, flux_shoreface_basic, flux_overwash_basic, len(texture))
+        W, T, dt, time[i_time], flux_shoreface, flux_overwash = _event(mode, event, time[i_time - 1], W_event, W_fw, dt_min, dt_fw, flux_shoreface_basic, flux_overwash_basic, len(sediment_size))
 
         sea_level[i_time] = np.interp(time[i_time],
                                       sea_level_curve[:, 0],
@@ -605,7 +605,7 @@ def _run(initial_elevation,
         
         i_mainland, i_backbarrier, i_coastline, i_wavebase = _decompose_domain(elevation[i_time],
                                                                                sea_level[i_time], W, T,
-                                                                               texture, Theta_wl)
+                                                                               sediment_size, Theta_wl)
         facies[i_time], i_wavebase_event, i_wavebase_fw = _classify_facies(event, i_mainland, i_backbarrier,
                                                                            i_coastline, i_wavebase, i_wavebase_event,
                                                                            i_wavebase_fw, len(elevation[i_time]))
@@ -616,7 +616,7 @@ def _run(initial_elevation,
                                            ow_part, BB_max_width, A_factor_BB, max_height_BB,
                                            Tidalampl, Tide_Acc_VAR, TidalSand, fallout_rate_bb,
                                            max_height_SF, fallout_rate_sf, A_factor_SF, dh_ratio_acc,
-                                           event, texture_ratio, i_time, i_mainland, i_backbarrier,
+                                           event, sediment_fraction, i_time, i_mainland, i_backbarrier,
                                            i_coastline, i_wavebase, dt, spacing)
 
         i_time += 1
@@ -630,7 +630,7 @@ def _run(initial_elevation,
 
 
 @nb.jit(nopython=True)
-def _compute_mean_grain_size(stratigraphy, texture):
+def _compute_mean_grain_size(stratigraphy, sediment_size):
     """
     """
     mean = np.zeros(stratigraphy.shape[1:])
@@ -639,7 +639,7 @@ def _compute_mean_grain_size(stratigraphy, texture):
             stratigraphy_total = np.sum(stratigraphy[:, k, i])
             if stratigraphy_total > 0.:
                 for j in range(stratigraphy.shape[0]):
-                    mean[k, i] += texture[j]*stratigraphy[j, k, i]
+                    mean[k, i] += sediment_size[j]*stratigraphy[j, k, i]
                 mean[k, i] /= stratigraphy_total
                 
     return mean
@@ -762,11 +762,13 @@ class BarSim2D:
         ???
     fallout_rate_sf : float, default=0.0002
         ???
-    texture : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
-        ???
-    texture_ratio : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
-        ???
-    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2), default=(100., (0.2, 0.2, 0.3, 0.3))
+    sediment_size : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
+        Diameter of the grains of the different classes of sediments within the
+        influx of additional sediment by longshore drift.
+    sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
+        Fraction of the different classes of sediments within the influx of additional
+        sediment by longshore drift.
+    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.2, 0.2, 0.3, 0.3))
         Initial thickness of the substratum for each grain size. It can be directly
         an array representing the substratum, or a tuple (thickness, tuple with the
         proportion of each grain size), which is converted into an array during
@@ -817,8 +819,8 @@ class BarSim2D:
                  substrate_erosion=1,
                  fallout_rate_bb=0.,
                  fallout_rate_sf=0.0002,
-                 texture=(5., 50., 125., 250.),
-                 texture_ratio=(0.25, 0.25, 0.25, 0.25),
+                 sediment_size=(5., 50., 125., 250.),
+                 sediment_fraction=(0.25, 0.25, 0.25, 0.25),
                  initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
@@ -848,11 +850,11 @@ class BarSim2D:
         self.substrate_erosion = substrate_erosion
         self.fallout_rate_bb = fallout_rate_bb
         self.fallout_rate_sf = fallout_rate_sf
-        self.texture = np.array(texture)
-        self.texture_ratio = np.array(texture_ratio)
+        self.sediment_size = np.array(sediment_size)
+        self.sediment_fraction = np.array(sediment_fraction)
         if (len(initial_substratum) == 2
-            and len(initial_substratum[1]) == len(texture)):
-            self.initial_substratum = np.full((len(texture), len(initial_elevation)),
+            and len(initial_substratum[1]) == len(sediment_size)):
+            self.initial_substratum = np.full((len(sediment_size), len(initial_elevation)),
                                               initial_substratum[0])
             self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
         else:
@@ -921,8 +923,8 @@ class BarSim2D:
                                                                                  self.A_factor_BB, self.A_factor_SF,
                                                                                  self.max_height_SF, self.max_height_BB,
                                                                                  self.substrate_erosion, self.fallout_rate_bb,
-                                                                                 self.fallout_rate_sf, self.texture,
-                                                                                 self.texture_ratio, self.event, self.seed)
+                                                                                 self.fallout_rate_sf, self.sediment_size,
+                                                                                 self.sediment_fraction, self.event, self.seed)
         self.sequence_ = xr.Dataset(
             data_vars={
                 'Sea level': (('Time',), sea_level, {'units': 'meter', 'description': 'sea level through time'}),
@@ -936,7 +938,7 @@ class BarSim2D:
                                  self.spacing*(elevation.shape[1] - 0.5),
                                  elevation.shape[1]),
                 'Time': time,
-                'Grain size': np.array(self.texture),
+                'Grain size': self.sediment_size,
             },
         )
         self.sequence_['X'].attrs['units'] = 'meter'
@@ -972,7 +974,7 @@ class BarSim2D:
                 'Z': np.linspace(z_min + z_step/2.,
                                  z_max - z_step/2.,
                                  facies.shape[1]),
-                'Grain size': self.texture,
+                'Grain size': self.sediment_size,
                 'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
             },
         )
@@ -1017,9 +1019,9 @@ def _run_multiple(initial_elevation, initial_substratum, sea_level_curve, sedime
                   Tide_Acc_VAR, TidalSand, dh_ratio_acc, TDcorr_SF, TDcorr_OW,
                   erodibility, BB_max_width, A_factor_BB, A_factor_SF, max_height_SF,
                   max_height_BB, substrate_erosion, fallout_rate_bb, fallout_rate_sf,
-                  texture, texture_ratio, event, z_min, z_max, z_step, seed):
+                  sediment_size, sediment_fraction, event, z_min, z_max, z_step, seed):
     
-    stratigraphy = np.empty((len(texture),
+    stratigraphy = np.empty((len(sediment_size),
                              int((z_max - z_min)/z_step),
                              initial_elevation.shape[0],
                              initial_elevation.shape[1]))
@@ -1039,8 +1041,8 @@ def _run_multiple(initial_elevation, initial_substratum, sea_level_curve, sedime
                                                                   A_factor_BB, A_factor_SF,
                                                                   max_height_SF, max_height_BB,
                                                                   substrate_erosion, fallout_rate_bb,
-                                                                  fallout_rate_sf, texture,
-                                                                  texture_ratio, event, seed)
+                                                                  fallout_rate_sf, sediment_size,
+                                                                  sediment_fraction, event, seed)
         stratigraphy[:, :, i], facies[:, :, i] = _regrid_stratigraphy(elevation[-1], time_stratigraphy,
                                                                       time_facies, z_min, z_max, z_step)
         
@@ -1119,9 +1121,9 @@ class BarSimPseudo3D:
         ???
     fallout_rate_sf : float, default=0.0002
         ???
-    texture : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
+    sediment_size : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
         ???
-    texture_ratio : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
+    sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         ???
     initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2), default=(100., (0.2, 0.2, 0.3, 0.3))
         Initial thickness of the substratum for each grain size. It can be directly
@@ -1172,8 +1174,8 @@ class BarSimPseudo3D:
                  substrate_erosion=1,
                  fallout_rate_bb=0.,
                  fallout_rate_sf=0.0002,
-                 texture=(5., 50., 125., 250.),
-                 texture_ratio=(0.25, 0.25, 0.25, 0.25),
+                 sediment_size=(5., 50., 125., 250.),
+                 sediment_fraction=(0.25, 0.25, 0.25, 0.25),
                  initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
                  event=False,
                  preinterpolate_curves=False,
@@ -1204,11 +1206,11 @@ class BarSimPseudo3D:
         self.substrate_erosion = substrate_erosion
         self.fallout_rate_bb = fallout_rate_bb
         self.fallout_rate_sf = fallout_rate_sf
-        self.texture = np.array(texture)
-        self.texture_ratio = np.array(texture_ratio)
+        self.sediment_size = np.array(sediment_size)
+        self.sediment_fraction = np.array(sediment_fraction)
         if (len(initial_substratum) == 2
-            and len(initial_substratum[1]) == len(texture)):
-            self.initial_substratum = np.full((len(texture), initial_elevation.shape[1]),
+            and len(initial_substratum[1]) == len(sediment_size)):
+            self.initial_substratum = np.full((len(sediment_size), initial_elevation.shape[1]),
                                               initial_substratum[0])
             self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
         else:
@@ -1277,7 +1279,7 @@ class BarSimPseudo3D:
                                              self.Tide_Acc_VAR, self.TidalSand, self.dh_ratio_acc, self.TDcorr_SF,
                                              self.TDcorr_OW, self.erodibility, self.BB_max_width, self.A_factor_BB,
                                              self.A_factor_SF, self.max_height_SF, self.max_height_BB, self.substrate_erosion,
-                                             self.fallout_rate_bb, self.fallout_rate_sf, self.texture, self.texture_ratio,
+                                             self.fallout_rate_bb, self.fallout_rate_sf, self.sediment_size, self.sediment_fraction,
                                              self.event, z_min, z_max, z_step, self.seed)
         self.record_ = xr.Dataset(
             data_vars={
@@ -1296,7 +1298,7 @@ class BarSimPseudo3D:
                 'Z': np.linspace(z_min + z_step/2.,
                                  z_max - z_step/2.,
                                  stratigraphy.shape[1]),
-                'Grain size': self.texture,
+                'Grain size': self.sediment_size,
                 'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
             },
         )
