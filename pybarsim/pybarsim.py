@@ -1,6 +1,5 @@
 """BarSim"""
 
-
 # MIT License
 
 # Copyright (c) 2023 Guillaume Rongier, Joep Storms, Andrea Cuesta Cano
