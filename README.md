@@ -8,7 +8,7 @@ You can directly install pyBarSim from GitLab using pip:
 
     pip install git+https://gitlab.tudelft.nl/grongier/pybarsim.git
 
-## Use
+## Usage
 
 Basic use:
 
@@ -54,13 +54,18 @@ Here is the corresponding BibTex entry if you use LaTex:
 		doi="https://doi.org/10.1016/S0025-3227(03)00144-0",
 	}
 
-## Authors
+## Roadmap
 
-* Guillaume Rongier ![ORCID logo](https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png) [0000-0002-5910-6868](https://orcid.org/0000-0002-5910-6868)
+* [ ] Add option to make substratum unerodable.  
+* [ ] Add event-based outputs.  
+* [ ] Add petrophysical outputs.  
 
-* Joep Storms ![ORCID logo](https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png) [0000-0002-8902-8493](https://orcid.org/0000-0002-8902-8493)
+## Credits
 
-* Andrea Cuesta Cano ![ORCID logo](https://info.orcid.org/wp-content/uploads/2019/11/orcid_16x16.png) [0000-0002-7017-6031](https://orcid.org/0000-0002-7017-6031)
+This software was written by:
+
+| [Guillaume Rongier](https://github.com/grongier) <br>[![ORCID Badge](https://img.shields.io/badge/ORCID-A6CE39?logo=orcid&logoColor=fff&style=flat-square)](https://orcid.org/0000-0002-5910-6868)</br> | [Joep Storms](https://www.tudelft.nl/en/ceg/about-faculty/departments/geoscience-engineering/sections/applied-geology/staff/academic-staff/storms-jea) <br>[![ORCID Badge](https://img.shields.io/badge/ORCID-A6CE39?logo=orcid&logoColor=fff&style=flat-square)](https://orcid.org/0000-0002-8902-8493)</br> | [Andrea Cuesta Cano](https://www.tudelft.nl/citg/over-faculteit/afdelingen/geoscience-engineering/sections/applied-geology/staff/phd-students/cuesta-cano-a) <br>[![ORCID Badge](https://img.shields.io/badge/ORCID-A6CE39?logo=orcid&logoColor=fff&style=flat-square)](https://orcid.org/0000-0002-7017-6031)</br> |
+| :---: | :---: | :---: |
 
 ## License
 
