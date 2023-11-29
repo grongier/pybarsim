@@ -54,14 +54,6 @@ Here is the corresponding BibTex entry if you use LaTex:
 		doi="https://doi.org/10.1016/S0025-3227(03)00144-0",
 	}
 
-## Roadmap
-
-* [ ] Update and simplify the code to better highlight the different simulation steps in the functions.  
-* [ ] Add a parameter to limit the erosion ratio computed by *erodibility* for the pre-compacted substrate sediments. A value of 1 means that the substrate erodes in a similar manner as the sediments that are accumulated during the simulation. Any value below 1 limits the erosion of the substrate. It can be quite useful to test the impact of an older, well compacted substrate.  
-* [ ] Add event-based outputs.  
-* [ ] Add petrophysical outputs.  
-* [ ] Refactor the code to be compatible with the [BMI](https://bmi.readthedocs.io/en/latest/index.html).  
-
 ## Credits
 
 This software was written by:
