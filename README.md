@@ -17,13 +17,13 @@ import numpy as np
 from pybarsim import BarSim2D
 
 # Set the parameters
-duration = 10000.
+run_time = 10000.
 barsim = BarSim2D(np.linspace(1000., 900., 200),
-                  np.array([(0., 950.), (duration, 998.)]),
-                  np.array([(0., 25.), (duration, 5.)]),
+                  np.array([(0., 950.), (run_time, 998.)]),
+                  np.array([(0., 25.), (run_time, 5.)]),
                   spacing=100.)
 # Run the simulation
-barsim.run(duration=10000., dt_min=1., dt_fw=15.)
+barsim.run(run_time=10000., dt_fair_weather=15., dt_storm=1.)
 # Interpolate the outputs into a regular grid
 barsim.regrid(900., 1000., 0.5)
 # Compute the mean grain size
@@ -56,9 +56,11 @@ Here is the corresponding BibTex entry if you use LaTex:
 
 ## Roadmap
 
-* [ ] Add option to make substratum unerodable.  
+* [ ] Update and simplify the code to better highlight the different simulation steps in the functions.  
+* [ ] Add a parameter to limit the erosion ratio computed by *erodibility* for the pre-compacted substrate sediments. A value of 1 means that the substrate erodes in a similar manner as the sediments that are accumulated during the simulation. Any value below 1 limits the erosion of the substrate. It can be quite useful to test the impact of an older, well compacted substrate.  
 * [ ] Add event-based outputs.  
 * [ ] Add petrophysical outputs.  
+* [ ] Refactor the code to be compatible with the [BMI](https://bmi.readthedocs.io/en/latest/index.html).  
 
 ## Credits
 

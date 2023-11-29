@@ -40,7 +40,7 @@ import pyvista as pv
 # BarSim 2D
 
 @nb.jit(nopython=True)
-def _initialize_fluxes(TDcorr_SF, TDcorr_OW, sediment_size):
+def _initialize_fluxes(local_factor_shoreface, local_factor_backbarrier, sediment_size):
     """
     Adopted from Guillen and Hoekstra 1996, 1997, but slightly different (this
     is only for the >0.125mm fraction)
@@ -48,14 +48,14 @@ def _initialize_fluxes(TDcorr_SF, TDcorr_OW, sediment_size):
     flux_shoreface_basic = np.zeros(len(sediment_size))
     flux_overwash_basic = np.zeros(len(sediment_size))
     for j in range (len(sediment_size)):
-        flux_shoreface_basic[j] = TDcorr_SF * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
-        flux_overwash_basic[j] = TDcorr_OW * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
+        flux_shoreface_basic[j] = local_factor_shoreface * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
+        flux_overwash_basic[j] = local_factor_backbarrier * (110 + 590 * (0.125/(sediment_size[j]*0.001))**2.5)
         
     return flux_shoreface_basic, flux_overwash_basic
 
 
 @nb.jit(nopython=True)
-def _correct_travel_distance(allow_storms, event, flux_shoreface_basic, flux_overwash_basic,
+def _correct_travel_distance(allow_storms, is_storm, flux_shoreface_basic, flux_overwash_basic,
                              max_wave_height, n_grain_sizes, correction_factor=0.25):
     """
     Corrects travel distance for storm sediment transport processes (e.g. downwelling).
@@ -67,7 +67,7 @@ def _correct_travel_distance(allow_storms, event, flux_shoreface_basic, flux_ove
             flux_shoreface[i] = flux_shoreface_basic[i]
             flux_overwash[i] = flux_overwash_basic[i]
     else: # events
-        if (event is True):
+        if is_storm == True:
             correction_shoreface = correction_factor*max_wave_height
             correction_backbarrier = correction_factor*max_wave_height
             for i in range (n_grain_sizes):
@@ -82,32 +82,32 @@ def _correct_travel_distance(allow_storms, event, flux_shoreface_basic, flux_ove
 
 
 @nb.jit(nopython=True)
-def _update_fluxes(allow_storms, event, time, max_wave_height_storm, max_wave_height_fair_weather,
-                  dt_min, dt_fw, flux_shoreface_basic, flux_overwash_basic, n_grain_sizes):
+def _update_fluxes(allow_storms, is_storm, time, max_wave_height_storm, max_wave_height_fair_weather,
+                   dt_fair_weather, dt_storm, flux_shoreface_basic, flux_overwash_basic, n_grain_sizes):
     """
     Updates fluxes when storms are allowed.
     """
     if allow_storms == False: # no events
-        max_wave_height = max_wave_height_storm
-        T = 5
-        dt = dt_min
+        max_wave_height = max_wave_height_fair_weather
+        T = 5. # Why this fixed value?
+        dt = dt_fair_weather
         time += dt
     else: # events
-        if event == True:
+        if is_storm == True:
             max_wave_height = max_wave_height_storm + 2.*random.random()
             T = 4. + 0.5*random.random()
             # wavebase_depth = T * 0.5
-            dt = dt_min
+            dt = dt_storm
             time += dt
         else:
             max_wave_height = max_wave_height_fair_weather + 2.*random.random()
             T = 2.5 + 0.5*random.random()
             # wavebase_depth = T * 0.5
-            dt = dt_fw
+            dt = dt_fair_weather
             time += dt
 
     flux_shoreface, flux_overwash = _correct_travel_distance(allow_storms,
-                                                             event,
+                                                             is_storm,
                                                              flux_shoreface_basic,
                                                              flux_overwash_basic,
                                                              max_wave_height,
@@ -147,7 +147,8 @@ def _compute_shields_parameter(sediment_size):
 
 
 @nb.jit(nopython=True)
-def _compute_orbital_velocity(elevation, sea_level, max_wave_height, T, dimless_thres_orbital_velocity, sediment_size, i_coastline):
+def _compute_orbital_velocity(elevation, sea_level, max_wave_height, T, dimless_thres_orbital_velocity,
+                              sediment_size, i_coastline):
     """
     Computes the actual horizontal orbital velocity (m/s) based on Komar, Beach
     processes, 2nd edition, p163 and 164 and the max. horizontal orbital velocity
@@ -174,7 +175,8 @@ def _compute_orbital_velocity(elevation, sea_level, max_wave_height, T, dimless_
 
 
 @nb.jit(nopython=True)
-def _decompose_domain(elevation, sea_level, max_wave_height, T, sediment_size, dimless_thres_orbital_velocity):
+def _decompose_domain(elevation, sea_level, max_wave_height, T, sediment_size,
+                      dimless_thres_orbital_velocity):
     """
     Decomposes the domain by returning the indices of the mainland, the backbarrier,
     the coastline, and the wave base.
@@ -209,12 +211,12 @@ def _decompose_domain(elevation, sea_level, max_wave_height, T, sediment_size, d
 
 
 @nb.jit(nopython=True)
-def _classify_facies(event, i_mainland, i_backbarrier, i_coastline, i_wavebase,
+def _classify_facies(is_storm, i_mainland, i_backbarrier, i_coastline, i_wavebase,
                      i_wavebase_event, i_wavebase_fw, n_x):
     """
     Classifies the domain into facies.
     """
-    if event == False:
+    if is_storm == False:
         i_wavebase_fw = i_wavebase
     else:
         i_wavebase_event = i_wavebase
@@ -290,8 +292,8 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
 
 
 @nb.jit(nopython=True)
-def _erode(elevation, stratigraphy, sea_level, erodibility, max_wave_height, max_wave_height_fair_weather, i_time,
-           i_coastline, i_wavebase):
+def _erode(elevation, stratigraphy, sea_level, erodibility, max_wave_height,
+           max_wave_height_fair_weather, i_time, i_coastline, i_wavebase):
     """
     Erodes the domain based on Storms (2003) without reflection correction cd(t).
     """
@@ -307,7 +309,7 @@ def _erode(elevation, stratigraphy, sea_level, erodibility, max_wave_height, max
 
 @nb.jit(nopython=True)
 def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, washover_fraction,
-                       BB_max_width, sediment_fraction, i_mainland, i_backbarrier,
+                       max_width_backbarrier, sediment_fraction, i_mainland, i_backbarrier,
                        i_coastline, i_wavebase, dt, spacing):
     """
     Distributes the fluxes along the domain.
@@ -324,7 +326,7 @@ def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, wash
     total_flux_shoreface = np.zeros(n_grain_sizes)
     if (i_backbarrier > 1
         and i_coastline - i_mainland > 0
-        and (i_coastline - i_backbarrier)*spacing < BB_max_width
+        and (i_coastline - i_backbarrier)*spacing < max_width_backbarrier
         and sea_level >= sea_level_prev
         and washover_fraction > 0.): 
         for j in range(2, n_grain_sizes):    #NOTE!! ASSUME GRAINSIZE 3 and 4 ARE SAND
@@ -337,7 +339,8 @@ def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, wash
 
 @nb.jit(nopython=True)
 def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
-                      sea_level_prev, washover_fraction, BB_max_width, A_factor_BB, max_height_BB,
+                      sea_level_prev, washover_fraction, max_width_backbarrier,
+                      depth_factor_backbarrier, max_barrier_height_backbarrier,
                       i_time, i_mainland, i_backbarrier, i_coastline, spacing):
     """
     Deposits washover sediments based on the restriction algorithm (travel distance ~ expected height).
@@ -347,18 +350,18 @@ def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
     deposition_washover = np.zeros((n_grain_sizes, len(elevation[i_time])))
     if (i_backbarrier > 1
         and i_coastline - i_mainland > 0
-        and (i_coastline - i_backbarrier)*spacing < BB_max_width
+        and (i_coastline - i_backbarrier)*spacing < max_width_backbarrier
         and sea_level >= sea_level_prev
         and washover_fraction > 0.):
         for j in range(2, n_grain_sizes):
             sediment_flux[j, i_coastline - 1] = total_flux_washover[j]
 
         for i in range(i_coastline - 1, i_mainland, -1):
-            H_norm = (elevation[i_time, i] - sea_level)/max_height_BB
+            H_norm = (elevation[i_time, i] - sea_level)/max_barrier_height_backbarrier
 
             f_add = np.zeros(n_grain_sizes)
             for j in range(2, n_grain_sizes):
-                f_add[j] = flux_overwash[j]*(1. + 2.71828283**(H_norm*A_factor_BB))
+                f_add[j] = flux_overwash[j]*(1. + 2.71828283**(H_norm*depth_factor_backbarrier))
                 sediment_flux[j, i - 1] = sediment_flux[j, i] - sediment_flux[j, i]*spacing/f_add[j]  
                 deposition_washover[j, i] = (sediment_flux[j, i] - sediment_flux[j, i - 1])/spacing
                 
@@ -367,15 +370,15 @@ def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
 
 @nb.jit(nopython=True)
 def _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_level,
-                         sea_level_prev, washover_fraction, BB_max_width, i_backbarrier,
-                         i_coastline, i_mainland, spacing):
+                         sea_level_prev, washover_fraction, max_width_backbarrier,
+                         i_backbarrier, i_coastline, i_mainland, spacing):
     """
     Redistributes fluxes in the domain.
     """
     n_grain_sizes = sediment_flux.shape[0]
     if (i_backbarrier > 1
         and i_coastline - i_mainland > 0
-        and (i_coastline - i_backbarrier)*spacing < BB_max_width
+        and (i_coastline - i_backbarrier)*spacing < max_width_backbarrier
         and sea_level >= sea_level_prev
         and washover_fraction > 0.):
         for j in range(n_grain_sizes):
@@ -389,8 +392,8 @@ def _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_le
 
 @nb.jit(nopython=True)
 def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tidal_amplitude,
-                   Tide_Acc_VAR, TidalSand, fallout_rate_backbarrier, dh_ratio_acc, event,
-                   i_time, i_backbarrier, i_mainland, i_coastline, dt, spacing):
+                   min_tidal_area_for_transport, tide_sand_fraction, fallout_rate_backbarrier,
+                   is_storm, i_time, i_backbarrier, i_mainland, i_coastline, dt, spacing):
     """
     Deposits tidal sediments.
     """
@@ -402,37 +405,38 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tid
     for j in range(n_grain_sizes):
         sediment_flux_total += sediment_flux[j, i_coastline]
     
-    if event == False and tidal_amplitude > 0:
+    if is_storm == False and tidal_amplitude > 0:
         
         deposition_tidal_sum = 0.
-        BB_acc = 0
+        backbarrier_accommodation = 0
         # TODO: should that be changed for not taking into account if sea_level - elevation[i_time, i] <= 0?
         len_backbarrier = 0
         # Determine backbarrier accommodation
         for i in range(i_backbarrier - 1, i_mainland, -1):
             if sea_level - elevation[i_time, i] > 0.:
-                BB_acc += (sea_level - elevation[i_time, i])*spacing
+                backbarrier_accommodation += (sea_level - elevation[i_time, i])*spacing
                 len_backbarrier += 1
         # Minimum tidal basin size: USE ASMITA HERE? Area that is wet is 
         # proportional to the Tidal Amplitude. Also assume minimal hydraulic
         # gradient befor tidal processes become active
-        if BB_acc < Tide_Acc_VAR - tidal_amplitude*spacing*len_backbarrier:
+        if backbarrier_accommodation < min_tidal_area_for_transport - tidal_amplitude*spacing*len_backbarrier:
             tidal_supply = False
         else:
             tidal_supply = True
             
         # Max deposition rate based on Tidal amplitude, Backbarrier width and
         # time step, limited by total sediment flux
+        dh_ratio_acc = 1. # We need a default because the if statement below doesn't have an else, but is this a good default?
         if tidal_supply == True and tidal_amplitude > 0:
-            dh_Tidal_cap = len_backbarrier*spacing*tidal_amplitude*dt*0.001 # 1 is tuning parameter
+            tidal_deposition_capacity = len_backbarrier*spacing*tidal_amplitude*dt*0.001 # 1 is tuning parameter
 
-            if (dh_Tidal_cap > sediment_flux_total):
-                dh_Tidal_cap = sediment_flux_total
+            if (tidal_deposition_capacity > sediment_flux_total):
+                tidal_deposition_capacity = sediment_flux_total
 
-            if (dh_Tidal_cap > BB_acc):
-                dh_ratio_acc = 1
+            if (tidal_deposition_capacity > backbarrier_accommodation):
+                dh_ratio_acc = 1.
             else:
-                dh_ratio_acc = dh_Tidal_cap/BB_acc
+                dh_ratio_acc = tidal_deposition_capacity/backbarrier_accommodation
 
         # Max deposition rate cannot exceed the total eroded sediment from the shoreface
         for j in range(n_grain_sizes):
@@ -448,7 +452,7 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tid
                 for j in range(n_grain_sizes - 2):
                     deposition_tidal[j, i] = dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[j]/deposition_tidal_sum # grain size distribution tidal deposits (sum should be 1)
                 # Coarsest fraction less
-                deposition_tidal[n_grain_sizes - 1, i] = TidalSand*dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[n_grain_sizes - 1]/deposition_tidal_sum # grain size distribution tidal deposits (sum should be 1)
+                deposition_tidal[n_grain_sizes - 1, i] = tide_sand_fraction*dh_ratio_acc*(sea_level - elevation[i_time, i])*deposition_tidal_tot[n_grain_sizes - 1]/deposition_tidal_sum # grain size distribution tidal deposits (sum should be 1)
             
             # Leftover sediment for SHOREFACE deposition
             for j in range(n_grain_sizes):
@@ -467,8 +471,9 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tid
 
 
 @nb.jit(nopython=True)
-def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level, max_height_SF,
-                       fallout_rate_shoreface, A_factor_SF, i_time, i_coastline, spacing, dt):
+def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level,
+                       max_barrier_height_shoreface, fallout_rate_shoreface,
+                       depth_factor_shoreface, i_time, i_coastline, spacing, dt):
     """
     Deposits shoreface sediments.
     """
@@ -476,10 +481,10 @@ def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level, max_
     deposition_shoreface = np.zeros((n_grain_sizes, len(elevation[i_time])))
     # TODO: Would it be possible to do sediment_flux[j, i - 1] - sediment_flux[j, i]?
     for i in range(i_coastline, len(elevation[i_time]) - 1):
-        H_norm = (elevation[i_time, i] - sea_level)/max_height_SF - max_height_SF
+        H_norm = (elevation[i_time, i] - sea_level)/max_barrier_height_shoreface - max_barrier_height_shoreface
         f_add = np.zeros(n_grain_sizes)
         for j in range(n_grain_sizes):
-            f_add[j] = flux_shoreface[j]*(1 + 2.71828283**(H_norm*A_factor_SF))
+            f_add[j] = flux_shoreface[j]*(1 + 2.71828283**(H_norm*depth_factor_shoreface))
         for j in range(n_grain_sizes):
             sediment_flux[j, i + 1] = sediment_flux[j, i] - sediment_flux[j, i]*spacing/f_add[j]
         for j in range(n_grain_sizes):
@@ -517,36 +522,33 @@ def _deposit_stratigraphy(stratigraphy, deposition_washover, deposition_tidal,
 
 @nb.jit(nopython=True)
 def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
-             flux_shoreface, sea_level, washover_fraction, BB_max_width, A_factor_BB,
-             max_height_BB, tidal_amplitude, Tide_Acc_VAR, TidalSand, fallout_rate_backbarrier,
-             max_height_SF, fallout_rate_shoreface, A_factor_SF, dh_ratio_acc, event,
-             sediment_fraction, i_time, i_mainland, i_backbarrier, i_coastline,
+             flux_shoreface, sea_level, washover_fraction, max_width_backbarrier,
+             depth_factor_backbarrier, max_barrier_height_backbarrier, tidal_amplitude,
+             min_tidal_area_for_transport, tide_sand_fraction, fallout_rate_backbarrier,
+             max_barrier_height_shoreface, fallout_rate_shoreface, depth_factor_shoreface,
+             is_storm, sediment_fraction, i_time, i_mainland, i_backbarrier, i_coastline,
              i_wavebase, dt, spacing):
     """
     Deposits sediments in the domain.
     """
     total_flux, total_flux_washover, total_flux_shoreface = _distribute_fluxes(erosion, sediment_supply[i_time],
                                                                                sea_level[i_time], sea_level[i_time - 1],
-                                                                               washover_fraction, BB_max_width, sediment_fraction,
-                                                                               i_mainland, i_backbarrier,
-                                                                               i_coastline, i_wavebase,
-                                                                               dt, spacing)
-    sediment_flux, deposition_washover = _deposit_washover(elevation, total_flux_washover, flux_overwash,
-                                                           sea_level[i_time], sea_level[i_time - 1], washover_fraction,
-                                                           BB_max_width, A_factor_BB, max_height_BB, i_time,
+                                                                               washover_fraction, max_width_backbarrier,
+                                                                               sediment_fraction, i_mainland, i_backbarrier,
+                                                                               i_coastline, i_wavebase, dt, spacing)
+    sediment_flux, deposition_washover = _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level[i_time],
+                                                           sea_level[i_time - 1], washover_fraction, max_width_backbarrier,
+                                                           depth_factor_backbarrier, max_barrier_height_backbarrier, i_time,
                                                            i_mainland, i_backbarrier, i_coastline, spacing)
-    sediment_flux = _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface,
-                                         sea_level[i_time], sea_level[i_time - 1], washover_fraction, BB_max_width,
-                                         i_backbarrier, i_coastline, i_mainland, spacing)
-    sediment_flux, deposition_washover, deposition_tidal = _deposit_tidal(elevation, deposition_washover,
-                                                                          sediment_flux, sea_level[i_time],
-                                                                          tidal_amplitude, Tide_Acc_VAR, TidalSand,
-                                                                          fallout_rate_backbarrier, dh_ratio_acc, event,
-                                                                          i_time, i_backbarrier, i_mainland,
-                                                                          i_coastline, dt, spacing)
-    sediment_flux, deposition_shoreface = _deposit_shoreface(elevation, sediment_flux, flux_shoreface,
-                                                             sea_level[i_time], max_height_SF, fallout_rate_shoreface,
-                                                             A_factor_SF, i_time, i_coastline, spacing, dt)
+    sediment_flux = _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_level[i_time], sea_level[i_time - 1],
+                                         washover_fraction, max_width_backbarrier, i_backbarrier, i_coastline, i_mainland, spacing)
+    sediment_flux, deposition_washover, deposition_tidal = _deposit_tidal(elevation, deposition_washover, sediment_flux,
+                                                                          sea_level[i_time], tidal_amplitude, min_tidal_area_for_transport,
+                                                                          tide_sand_fraction, fallout_rate_backbarrier, is_storm, i_time,
+                                                                          i_backbarrier, i_mainland, i_coastline, dt, spacing)
+    sediment_flux, deposition_shoreface = _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level[i_time],
+                                                             max_barrier_height_shoreface, fallout_rate_shoreface,
+                                                             depth_factor_shoreface, i_time, i_coastline, spacing, dt)
     
     elevation = _update_elevation(elevation, erosion, deposition_washover, deposition_tidal,
                                   deposition_shoreface, i_time, i_mainland)
@@ -557,44 +559,24 @@ def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
     
 
 @nb.jit(nopython=True)
-def _run(initial_elevation,
-         initial_substratum,
-         sea_level_curve,
-         sediment_supply_curve,
-         duration=10000.,
-         spacing=100.,
-         washover_fraction=0.5,
-         allow_storms=2,
-         max_wave_height_fair_weather=1.5,
-         max_wave_height_storm=6.,
-         dt_min=1,
-         dt_fw=15,
-         tidal_amplitude=2,
-         Tide_Acc_VAR=100,
-         TidalSand=0.3,
-         dh_ratio_acc=200000,
-         TDcorr_SF=1.5,
-         TDcorr_OW=1.,
-         erodibility=0.1,
-         BB_max_width=500,
-         A_factor_BB=5,
-         A_factor_SF=10,
-         max_height_SF=1.,
-         max_height_BB=1.,
-         substrate_erosion=1,
-         fallout_rate_backbarrier=0.,
-         fallout_rate_shoreface=0.0002,
-         sediment_size=(5., 50., 125., 250.),
-         sediment_fraction=(0.25, 0.25, 0.25, 0.25),
-         event=False,
-         seed=42):
+def _run(initial_elevation, sea_level_curve, sediment_supply_curve, spacing,
+         run_time, dt_fair_weather, dt_storm, max_wave_height_fair_weather,
+         allow_storms, start_with_storm, max_wave_height_storm, tidal_amplitude,
+         min_tidal_area_for_transport, sediment_size, sediment_fraction,
+         initial_substratum, erodibility, washover_fraction, tide_sand_fraction,
+         depth_factor_backbarrier, depth_factor_shoreface, local_factor_shoreface,
+         local_factor_backbarrier, fallout_rate_backbarrier, fallout_rate_shoreface,
+         max_width_backbarrier, max_barrier_height_shoreface,
+         max_barrier_height_backbarrier, seed):
     """
-    Runs BarSim for a given duration.
+    Runs BarSim for a given run time.
     """
     random.seed(seed)
-    
-    dt_average = (dt_min + dt_fw)//2 - 1 if allow_storms == True else dt_min
-    n_time_steps = int(duration/dt_average) + 1
+
+    if allow_storms == True:
+        n_time_steps = math.ceil(2*run_time/(dt_fair_weather + dt_storm)) + 1
+    else:
+        n_time_steps = math.ceil(run_time/dt_fair_weather) + 1
     
     time = np.zeros(n_time_steps)
     sea_level = np.zeros(n_time_steps)
@@ -607,18 +589,21 @@ def _run(initial_elevation,
     stratigraphy[:, 0] = initial_substratum
     facies = np.ones((n_time_steps, len(initial_elevation)), np.int8)
 
-    flux_shoreface_basic, flux_overwash_basic = _initialize_fluxes(TDcorr_SF, TDcorr_OW, sediment_size)
+    flux_shoreface_basic, flux_overwash_basic = _initialize_fluxes(local_factor_shoreface,
+                                                                   local_factor_backbarrier,
+                                                                   sediment_size)
     dimless_thres_orbital_velocity = _compute_shields_parameter(sediment_size)
     i_wavebase_event = 0
     i_wavebase_fw = 0
 
-    # TODO: What is that parameter? Why is it an input as well?
-    event = False
+    is_storm = start_with_storm
 
     i_time = 1
-    while time[i_time - 1] < duration:
+    while time[i_time - 1] < run_time:
         
-        max_wave_height, T, dt, time[i_time], flux_shoreface, flux_overwash = _update_fluxes(allow_storms, event, time[i_time - 1], max_wave_height_storm, max_wave_height_fair_weather, dt_min, dt_fw, flux_shoreface_basic, flux_overwash_basic, len(sediment_size))
+        max_wave_height, T, dt, time[i_time], flux_shoreface, flux_overwash = _update_fluxes(allow_storms, is_storm, time[i_time - 1], max_wave_height_storm,
+                                                                                             max_wave_height_fair_weather, dt_fair_weather, dt_storm,
+                                                                                             flux_shoreface_basic, flux_overwash_basic, len(sediment_size))
 
         sea_level[i_time] = np.interp(time[i_time],
                                       sea_level_curve[:, 0],
@@ -628,27 +613,23 @@ def _run(initial_elevation,
                                             sediment_supply_curve[:, 1])
         elevation[i_time] = elevation[i_time - 1]
         
-        i_mainland, i_backbarrier, i_coastline, i_wavebase = _decompose_domain(elevation[i_time],
-                                                                               sea_level[i_time], max_wave_height, T,
+        i_mainland, i_backbarrier, i_coastline, i_wavebase = _decompose_domain(elevation[i_time], sea_level[i_time], max_wave_height, T,
                                                                                sediment_size, dimless_thres_orbital_velocity)
-        facies[i_time], i_wavebase_event, i_wavebase_fw = _classify_facies(event, i_mainland, i_backbarrier,
-                                                                           i_coastline, i_wavebase, i_wavebase_event,
-                                                                           i_wavebase_fw, len(elevation[i_time]))
-        stratigraphy, erosion = _erode(elevation, stratigraphy, sea_level[i_time], erodibility,
-                                       max_wave_height, max_wave_height_fair_weather, i_time, i_coastline, i_wavebase)        
-        elevation, stratigraphy = _deposit(elevation, stratigraphy, erosion, sediment_supply,
-                                           flux_overwash, flux_shoreface, sea_level,
-                                           washover_fraction, BB_max_width, A_factor_BB, max_height_BB,
-                                           tidal_amplitude, Tide_Acc_VAR, TidalSand, fallout_rate_backbarrier,
-                                           max_height_SF, fallout_rate_shoreface, A_factor_SF, dh_ratio_acc,
-                                           event, sediment_fraction, i_time, i_mainland, i_backbarrier,
-                                           i_coastline, i_wavebase, dt, spacing)
+        facies[i_time], i_wavebase_event, i_wavebase_fw = _classify_facies(is_storm, i_mainland, i_backbarrier, i_coastline, i_wavebase,
+                                                                           i_wavebase_event, i_wavebase_fw, len(elevation[i_time]))
+        stratigraphy, erosion = _erode(elevation, stratigraphy, sea_level[i_time], erodibility, max_wave_height,
+                                       max_wave_height_fair_weather, i_time, i_coastline, i_wavebase)        
+        elevation, stratigraphy = _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash, flux_shoreface, sea_level,
+                                           washover_fraction, max_width_backbarrier, depth_factor_backbarrier, max_barrier_height_backbarrier,
+                                           tidal_amplitude, min_tidal_area_for_transport, tide_sand_fraction, fallout_rate_backbarrier,
+                                           max_barrier_height_shoreface, fallout_rate_shoreface, depth_factor_shoreface, is_storm,
+                                           sediment_fraction, i_time, i_mainland, i_backbarrier, i_coastline, i_wavebase, dt, spacing)
 
         i_time += 1
-        if(i_time%2 == 0):
-            event = True
+        if is_storm == False:
+            is_storm = True
         else:
-            event = False
+            is_storm = False
     
     return (time[:i_time], sea_level[:i_time], sediment_supply[:i_time],
             elevation[:i_time], stratigraphy[:, :i_time], facies[:i_time])
@@ -696,11 +677,11 @@ def _compute_std_grain_size(stratigraphy, grain_size, to_phi):
 
 
 @nb.jit(nopython=True)
-def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max, z_step):
+def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max, dz):
     """
     Interpolates the time stratigraphy on a regular grid in space.
     """
-    z_corner = np.linspace(z_min, z_max, int((z_max - z_min)/z_step) + 1)
+    z_corner = np.linspace(z_min, z_max, int((z_max - z_min)/dz) + 1)
     stratigraphy = np.zeros((time_stratigraphy.shape[0],
                              len(z_corner) - 1,
                              time_stratigraphy.shape[2]))
@@ -717,12 +698,12 @@ def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max
                 and z_corner[k] < layer_top):
                 ratio = (min(z_corner[k + 1], layer_top) - max(z_corner[k], layer_bottom))/(layer_top - layer_bottom)
                 stratigraphy[:, k, i] += ratio*time_stratigraphy[:, l, i]
-                ratio = (min(z_corner[k + 1], layer_top) - max(z_corner[k], layer_bottom))/z_step
+                ratio = (min(z_corner[k + 1], layer_top) - max(z_corner[k], layer_bottom))/dz
                 facies[time_facies[l, i], k, i] += ratio
             if z_corner[k + 1] > elevation[i]:
-                facies[0, k, i] = (z_corner[k + 1] - max(elevation[i], z_corner[k]))/z_step
+                facies[0, k, i] = (z_corner[k + 1] - max(elevation[i], z_corner[k]))/dz
             if l == 0 and z_corner[k] < layer_bottom:
-                facies[0, k, i] = (min(z_corner[k + 1], layer_bottom) - z_corner[k])/z_step
+                facies[0, k, i] = (min(z_corner[k + 1], layer_bottom) - z_corner[k])/dz
             if l > 0 and z_corner[k] < layer_bottom:
                 l -= 1
                 layer_top = layer_bottom
@@ -736,80 +717,96 @@ def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max
 class BarSim2D:
     """
     2D implementation of the multiple grain-size, process-response model BarSim.
-    
-    TODO: Rename input parameters, pick good defaults, reorder, and fill the doc.
 
     Parameters
     ----------
     initial_elevation : array-like of shape (n_x,)
-        The initial elevation.
+        The initial elevation (m).
     sea_level_curve : array-like of shape (n_t, 2)
-        The inflexion points of sea level in time.
+        The inflection points of sea level in time (yr, m).
     sediment_supply_curve : array-like of shape (n_t, 2)
-        The inflexion points of sediment supply in time.
+        The inflection points of sediment supply in time (yr, m2/yr).
     spacing : float, default=100.
-        The grid spatial resolution.
-    washover_fraction : float, default=0.5
-        Fraction of sediments going into washover instead of shoreface.
-    allow_storms : bool, default=True
-        If true, allows storm events, otherwise only fair weather is simulated.
+        The grid spatial resolution (m).
     max_wave_height_fair_weather : float, default=1.5
         Maximum fair-weather wave height used to simulate a time-series of wave
-        height under fair-weather conditions.
+        height under fair-weather conditions (m).
+    allow_storms : bool, default=True
+        If True, allows storm events, otherwise only fair weather is simulated.
+    start_with_storm : bool, default=False
+        If True, starts the simulation with a storm, otherwise starts with fair-
+        weather conditions.
     max_wave_height_storm : float, default=6.
-        Maximum wave height for storm events.
+        Maximum wave height for storm events (m).
     tidal_amplitude : float, default=2.
-        Tidal amplitude.
-    Tide_Acc_VAR : float, default=100
-        ???
-    TidalSand : float, default=0.3
-        ???
-    dh_ratio_acc : ???, default=200000
-        ??? Why a default value so high? When the default value is actually used it leads to crazy results
-    TDcorr_SF : float, default=1.5
-        ???
-    TDcorr_OW : float, default=1.
-        ???
-    erodibility : float, default=0.1
-        ???
-    BB_max_width : ???, default=500
-        ???
-    A_factor_BB : ???, default=5
-        ???
-    A_factor_SF : ???, default=10
-        ???
-    A_factor_SF : ???, default=10
-        ???
-    max_height_SF : float, default=1.
-        ???
-    max_height_BB : float, default=1.
-        ???
-    substrate_erosion : ???, default=1
-        ??? That parameter is never used
-    fallout_rate_backbarrier : float, default=0.
-        Constant fall-out rate of organics and fines in the backbarrier area.
-    fallout_rate_shoreface : float, default=0.0002
-        Constant fall-out rate of organics and fines in the shoreface area.
+        Tidal amplitude (m).
+    min_tidal_area_for_transport : float, default=100.
+        Minimum tidal prism area required for tide induced transport to the
+        backbarrier/tidal basin (m).
     sediment_size : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
         Diameter of the grains of the different classes of sediments within the
-        influx of additional sediment by longshore drift.
+        influx of additional sediment by longshore drift (μm).
     sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         Fraction of the different classes of sediments within the influx of additional
-        sediment by longshore drift.
-    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.2, 0.2, 0.3, 0.3))
+        sediment by longshore drift. Each value must be between 0 and 1.
+    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.25, 0.25, 0.25, 0.25))
         Initial thickness of the substratum for each grain size. It can be directly
         an array representing the substratum, or a tuple (thickness, tuple with the
         proportion of each grain size), which is converted into an array during
-        initialization.
-    event : bool, default=False
-        ??? Why is this parameter set as an input? It's changing during simulation.
+        initialization. Make sure that the substrate is thick enough to not be
+        fully eroded during simulation.
+    erodibility : float, default=0.1
+        Multiplier or tuning parameter (c_e in equation 3 of Storms (2003)) to
+        adjust the erosion capacity.
+    washover_fraction : float, default=0.5
+        Fraction of sediments going into washover instead of shoreface. It must
+        be between 0 and 1.
+    tide_sand_fraction : float, default=0.3
+        Fraction of the sand-prone grain-size class available for tide-induced
+        transport. This rule ensures that tide-induced transport is focused on
+        the fine-grained fractions by limiting the sand-sized grain-size
+        fraction. NOTE that the correct grain-size class is limited! It must be
+        between 0 and 1.
+    depth_factor_backbarrier : float, default=5.
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        deposition.
+    depth_factor_shoreface : float, default=10.
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        deposition.
+    local_factor_shoreface : float, default=1.5
+        Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))
+        to adjust for local conditions of the sediment travel distance at the
+        shoreface.
+    local_factor_backbarrier : float, default=1.
+        Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))
+        to adjust for local conditions of the sediment travel distance at the
+        backbarrier.
+    fallout_rate_backbarrier : float, default=0.
+        Constant fall-out rate of fines (the finest sediment fraction only) in the
+        backbarrier area (mm/yr). Is only active during fair-weather conditions.
+    fallout_rate_shoreface : float, default=0.0002
+        Constant fall-out rate of fines (the finest sediment fraction only)in the
+        shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
+        active during fair-weather conditions.
+    max_width_backbarrier : float, default=500.
+        Maximum width of the backbarrier (m).
+    max_barrier_height_shoreface : float, default=1.
+        Maximum height of barrier island on the seaward side (m). Higher elevations
+        above sea level limit the deposition. The parameter refers to z_l in
+        equation 9 in Storms et al. (2002). This is a sensitive parameter, better
+        keep the default value.
+    max_barrier_height_backbarrier : float, default=1.
+        Maximum height of barrier island on the backbarrier side (m). Higher
+        elevations above sea level limit the deposition. The parameter refers to
+        z_l in equation 9 in Storms et al. (2002). This is a sensitive parameter,
+        better keep the default value.
     preinterpolate_curves: bool, default=False
-        If True, preinterpolate the sea level and sediment supply curves.
+        If True, pre-interpolates the sea level and sediment supply curves.
     monotonic: bool, default=True
         If True, uses a monotonic interpolation for sea level and sediment supply,
         otherwise uses a cubic interpolation.
     seed : int, default=42
-        Controls random number generation for reproductibility.
+        Controls random number generation for reproducibility.
 
     Attributes
     ----------
@@ -820,86 +817,86 @@ class BarSim2D:
         
     References
     ----------
+    Storms, J.E.A., Weltje, G.J., Van Dijke, J.J., Geel, C.R., Kroonenberg, S.B. (2002) https://doi.org/10.1306/052501720226
+        Process-response modeling of wave-dominated coastal systems: simulating evolution and stratigraphy on geological timescales.
     Storms, J.E.A. (2003) https://doi.org/10.1016/S0025-3227(03)00144-0
-    Event-based stratigraphic simulation of wave-dominated shallow-marine environments
+        Event-based stratigraphic simulation of wave-dominated shallow-marine environments
     """
     def __init__(self,
                  initial_elevation,
                  sea_level_curve,
                  sediment_supply_curve,
                  spacing=100.,
-                 washover_fraction=0.5,
-                 allow_storms=True,
                  max_wave_height_fair_weather=1.5,
+                 allow_storms=True,
+                 start_with_storm=False,
                  max_wave_height_storm=6.,
                  tidal_amplitude=2.,
-                 Tide_Acc_VAR=100,
-                 TidalSand=0.3,
-                 dh_ratio_acc=200000,
-                 TDcorr_SF=1.5,
-                 TDcorr_OW=1.,
-                 erodibility=0.1,
-                 BB_max_width=500,
-                 A_factor_BB=5,
-                 A_factor_SF=10,
-                 max_height_SF=1.,
-                 max_height_BB=1.,
-                 substrate_erosion=1,
-                 fallout_rate_backbarrier=0.,
-                 fallout_rate_shoreface=0.0002,
+                 min_tidal_area_for_transport=100.,
                  sediment_size=(5., 50., 125., 250.),
                  sediment_fraction=(0.25, 0.25, 0.25, 0.25),
-                 initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
-                 event=False,
+                 initial_substratum=(100., (0.25, 0.25, 0.25, 0.25)),
+                 erodibility=0.1,
+                 washover_fraction=0.5,
+                 tide_sand_fraction=0.3,
+                 depth_factor_backbarrier=5.,
+                 depth_factor_shoreface=10.,
+                 local_factor_shoreface=1.5,
+                 local_factor_backbarrier=1.,
+                 fallout_rate_backbarrier=0.,
+                 fallout_rate_shoreface=0.0002,
+                 max_width_backbarrier=500.,
+                 max_barrier_height_shoreface=1.,
+                 max_barrier_height_backbarrier=1.,
                  preinterpolate_curves=False,
                  monotonic=True,
                  seed=42):
         
-        self.initial_elevation = np.array(initial_elevation)
-        self.sea_level_curve = np.array(sea_level_curve)
-        self.sediment_supply_curve = np.array(sediment_supply_curve)
+        self.initial_elevation = np.asarray(initial_elevation)
+        self.sea_level_curve = np.asarray(sea_level_curve)
+        self.sediment_supply_curve = np.asarray(sediment_supply_curve)
         self.spacing = spacing
-        self.washover_fraction = washover_fraction
-        self.allow_storms = allow_storms
         self.max_wave_height_fair_weather = max_wave_height_fair_weather
+        self.allow_storms = allow_storms
+        self.start_with_storm = start_with_storm
         self.max_wave_height_storm = max_wave_height_storm
         self.tidal_amplitude = tidal_amplitude
-        self.Tide_Acc_VAR = Tide_Acc_VAR
-        self.TidalSand = TidalSand
-        self.dh_ratio_acc = dh_ratio_acc
-        self.TDcorr_SF = TDcorr_SF
-        self.TDcorr_OW = TDcorr_OW
-        self.erodibility = erodibility
-        self.BB_max_width = BB_max_width
-        self.A_factor_BB = A_factor_BB
-        self.A_factor_SF = A_factor_SF
-        self.max_height_SF = max_height_SF
-        self.max_height_BB = max_height_BB
-        self.substrate_erosion = substrate_erosion
-        self.fallout_rate_backbarrier = fallout_rate_backbarrier
-        self.fallout_rate_shoreface = fallout_rate_shoreface
-        self.sediment_size = np.array(sediment_size)
-        self.sediment_fraction = np.array(sediment_fraction)
+        self.min_tidal_area_for_transport = min_tidal_area_for_transport
+        self.sediment_size = np.asarray(sediment_size)
+        self.sediment_fraction = np.asarray(sediment_fraction)
         if (len(initial_substratum) == 2
             and len(initial_substratum[1]) == len(sediment_size)):
             self.initial_substratum = np.full((len(sediment_size), len(initial_elevation)),
                                               initial_substratum[0])
-            self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
+            self.initial_substratum *= np.asarray(initial_substratum[1])[:, np.newaxis]
         else:
-            self.initial_substratum = np.array(initial_substratum)
-        self.event = event
+            self.initial_substratum = np.asarray(initial_substratum)
+        self.erodibility = erodibility
+        self.washover_fraction = washover_fraction
+        self.tide_sand_fraction = tide_sand_fraction
+        self.depth_factor_backbarrier = depth_factor_backbarrier
+        self.depth_factor_shoreface = depth_factor_shoreface
+        self.local_factor_shoreface = local_factor_shoreface
+        self.local_factor_backbarrier = local_factor_backbarrier
+        self.fallout_rate_backbarrier = fallout_rate_backbarrier
+        self.fallout_rate_shoreface = fallout_rate_shoreface
+        self.max_width_backbarrier = max_width_backbarrier
+        self.max_barrier_height_shoreface = max_barrier_height_shoreface
+        self.max_barrier_height_backbarrier = max_barrier_height_backbarrier
         self.preinterpolate_curves = preinterpolate_curves
         self.monotonic = monotonic
         self.seed = seed
         
-    def _preinterpolate_curves(self, duration, dt_min, dt_fw):
+    def _preinterpolate_curves(self, run_time, dt_fair_weather, dt_storm):
         """
         Preinterpolate the sea level and sediment supply curves using a cubic interpolation
         before using them in Numba.
         TODO: Would be better to have a cubic interpolation in Numba.
         """
-        dt_average = (dt_min + dt_fw)//2 - 1 if self.allow_storms == True else dt_min
-        n_time_steps = int(duration/dt_average) + 1
+        if self.allow_storms == True:
+            n_time_steps = math.ceil(2*run_time/(dt_fair_weather + dt_storm)) + 1
+        else:
+            n_time_steps = math.ceil(run_time/dt_fair_weather) + 1
         
         if self.monotonic == False:
             sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
@@ -915,7 +912,7 @@ class BarSim2D:
                                                                      self.sediment_supply_curve[:, 1])
             
         sea_level_interp = np.empty((n_time_steps, 2))
-        sea_level_interp[:, 0] = np.linspace(0., duration, n_time_steps)
+        sea_level_interp[:, 0] = np.linspace(0., run_time, n_time_steps)
         sea_level_interp[:, 1] = sea_level_function(sea_level_interp[:, 0])
         sediment_supply_interp = np.empty((n_time_steps, 2))
         sediment_supply_interp[:, 0] = sea_level_interp[:, 0]
@@ -923,18 +920,18 @@ class BarSim2D:
         
         return sea_level_interp, sediment_supply_interp
     
-    def run(self, duration=10000., dt_min=1., dt_fw=15.):
+    def run(self, run_time=10000., dt_fair_weather=15., dt_storm=1.):
         """
-        Runs BarSim for a given duration.
+        Runs BarSim for a given run_time.
 
         Parameters
         ----------
-        duration : float, default=10000.
-            Duration of the run (in years).
-        dt_min : float, default=10000.
-            Minimum time step (in years).
-        dt_fw : float, default=10000.
-            ??? (in years).
+        run_time : float, default=10000.
+            Duration of the run (yr).
+        dt_fair_weather : float, default=15.
+            Time step in fair weather conditions (yr).
+        dt_storm : float, default=1.
+            Time step during a storm (yr).
 
         Returns
         -------
@@ -942,22 +939,20 @@ class BarSim2D:
             Simulator with a `sequence_` attribute.
         """
         if self.preinterpolate_curves == True:
-            sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(duration, dt_min, dt_fw)
+            sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(run_time, dt_fair_weather, dt_storm)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
-        time, sea_level, sediment_supply, elevation, stratigraphy, facies = _run(self.initial_elevation, self.initial_substratum,
-                                                                                 sea_level_curve, sediment_supply_curve,
-                                                                                 duration, self.spacing, self.washover_fraction, self.allow_storms,
-                                                                                 self.max_wave_height_fair_weather, self.max_wave_height_storm, dt_min, dt_fw,
-                                                                                 self.tidal_amplitude, self.Tide_Acc_VAR,
-                                                                                 self.TidalSand, self.dh_ratio_acc,
-                                                                                 self.TDcorr_SF, self.TDcorr_OW,
-                                                                                 self.erodibility, self.BB_max_width,
-                                                                                 self.A_factor_BB, self.A_factor_SF,
-                                                                                 self.max_height_SF, self.max_height_BB,
-                                                                                 self.substrate_erosion, self.fallout_rate_backbarrier,
-                                                                                 self.fallout_rate_shoreface, self.sediment_size,
-                                                                                 self.sediment_fraction, self.event, self.seed)
+        time, sea_level, sediment_supply, elevation, stratigraphy, facies = _run(self.initial_elevation, sea_level_curve, sediment_supply_curve,
+                                                                                 self.spacing, run_time, dt_fair_weather, dt_storm, self.max_wave_height_fair_weather,
+                                                                                 self.allow_storms, self.start_with_storm, self.max_wave_height_storm,
+                                                                                 self.tidal_amplitude, self.min_tidal_area_for_transport, self.sediment_size,
+                                                                                 self.sediment_fraction, self.initial_substratum, self.erodibility,
+                                                                                 self.washover_fraction, self.tide_sand_fraction, self.depth_factor_backbarrier,
+                                                                                 self.depth_factor_shoreface, self.local_factor_shoreface,
+                                                                                 self.local_factor_backbarrier, self.fallout_rate_backbarrier,
+                                                                                 self.fallout_rate_shoreface, self.max_width_backbarrier,
+                                                                                 self.max_barrier_height_shoreface, self.max_barrier_height_backbarrier,
+                                                                                 self.seed)
         self.sequence_ = xr.Dataset(
             data_vars={
                 'Sea level': (
@@ -1014,18 +1009,18 @@ class BarSim2D:
 
         return self
         
-    def regrid(self, z_min, z_max, z_step):
+    def regrid(self, z_min, z_max, dz):
         """
         Interpolates the time stratigraphy into a regular grid.
 
         Parameters
         ----------
         z_min : float
-            Lower border of the grid.
+            Lower border of the grid (m).
         z_max : float
-            Upper border of the grid.
-        z_step : float
-            Resolution of the grid.
+            Upper border of the grid (m).
+        dz : float
+            Resolution of the grid (m).
 
         Returns
         -------
@@ -1035,12 +1030,12 @@ class BarSim2D:
         stratigraphy, facies = _regrid_stratigraphy(self.sequence_['Elevation'][-1].to_numpy(),
                                                     self.sequence_['Stratigraphy'].to_numpy(),
                                                     self.sequence_['Facies'].to_numpy(),
-                                                    z_min, z_max, z_step)
+                                                    z_min, z_max, dz)
         self.record_ = xr.Dataset(
             data_vars={
                 'Stratigraphy': (
                     ('Grain size', 'Z', 'X'),
-                    stratigraphy/z_step,
+                    stratigraphy/dz,
                     {
                         'units': '-',
                         'description': 'fraction of each grain size in a cell',
@@ -1059,8 +1054,8 @@ class BarSim2D:
                 'X': np.linspace(self.spacing/2.,
                                  self.spacing*(facies.shape[2] - 0.5),
                                  facies.shape[2]),
-                'Z': np.linspace(z_min + z_step/2.,
-                                 z_max - z_step/2.,
+                'Z': np.linspace(z_min + dz/2.,
+                                 z_max - dz/2.,
                                  facies.shape[1]),
                 'Grain size': self.sediment_size,
                 'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
@@ -1126,36 +1121,38 @@ class BarSim2D:
 # BarSim 2.5D
 
 @nb.jit(nopython=True, parallel=True)
-def _run_multiple(initial_elevation, initial_substratum, sea_level_curve, sediment_supply_curve,
-                  duration, spacing, washover_fraction, allow_storms, max_wave_height_fair_weather,
-                  max_wave_height_storm, dt_min, dt_fw, tidal_amplitude, Tide_Acc_VAR, TidalSand,
-                  dh_ratio_acc, TDcorr_SF, TDcorr_OW, erodibility, BB_max_width, A_factor_BB,
-                  A_factor_SF, max_height_SF, max_height_BB, substrate_erosion, fallout_rate_backbarrier,
-                  fallout_rate_shoreface, sediment_size, sediment_fraction, event, z_min, z_max, z_step, seed):
+def _run_multiple(initial_elevation, sea_level_curve, sediment_supply_curve, spacing,
+                  run_time, dt_fair_weather, dt_storm, max_wave_height_fair_weather, allow_storms,
+                  start_with_storm, max_wave_height_storm, tidal_amplitude,
+                  min_tidal_area_for_transport, sediment_size, sediment_fraction,
+                  initial_substratum, erodibility, washover_fraction, tide_sand_fraction,
+                  depth_factor_backbarrier, depth_factor_shoreface, local_factor_shoreface,
+                  local_factor_backbarrier, fallout_rate_backbarrier, fallout_rate_shoreface,
+                  max_width_backbarrier, max_barrier_height_shoreface,
+                  max_barrier_height_backbarrier, z_min, z_max, dz, seed):
     
     stratigraphy = np.empty((len(sediment_size),
-                             int((z_max - z_min)/z_step),
+                             int((z_max - z_min)/dz),
                              initial_elevation.shape[0],
                              initial_elevation.shape[1]))
     facies = np.empty((8,
-                       int((z_max - z_min)/z_step),
+                       int((z_max - z_min)/dz),
                        initial_elevation.shape[0],
                        initial_elevation.shape[1]))
     for i in nb.prange(initial_elevation.shape[0]):
-        _, _, _, elevation, time_stratigraphy, time_facies = _run(initial_elevation[i], initial_substratum,
-                                                                  sea_level_curve, sediment_supply_curve[i],
-                                                                  duration, spacing, washover_fraction,
-                                                                  allow_storms, max_wave_height_fair_weather,
-                                                                  max_wave_height_storm, dt_min, dt_fw,
-                                                                  tidal_amplitude, Tide_Acc_VAR, TidalSand,
-                                                                  dh_ratio_acc, TDcorr_SF, TDcorr_OW,
-                                                                  erodibility, BB_max_width, A_factor_BB,
-                                                                  A_factor_SF, max_height_SF, max_height_BB,
-                                                                  substrate_erosion, fallout_rate_backbarrier,
-                                                                  fallout_rate_shoreface, sediment_size,
-                                                                  sediment_fraction, event, seed)
+        _, _, _, elevation, time_stratigraphy, time_facies = _run(initial_elevation[i], sea_level_curve, sediment_supply_curve[i],
+                                                                  spacing, run_time, dt_fair_weather, dt_storm, max_wave_height_fair_weather,
+                                                                  allow_storms, start_with_storm, max_wave_height_storm,
+                                                                  tidal_amplitude, min_tidal_area_for_transport, sediment_size,
+                                                                  sediment_fraction, initial_substratum, erodibility,
+                                                                  washover_fraction, tide_sand_fraction, depth_factor_backbarrier,
+                                                                  depth_factor_shoreface, local_factor_shoreface,
+                                                                  local_factor_backbarrier, fallout_rate_backbarrier,
+                                                                  fallout_rate_shoreface, max_width_backbarrier,
+                                                                  max_barrier_height_shoreface, max_barrier_height_backbarrier,
+                                                                  seed)
         stratigraphy[:, :, i], facies[:, :, i] = _regrid_stratigraphy(elevation[-1], time_stratigraphy,
-                                                                      time_facies, z_min, z_max, z_step)
+                                                                      time_facies, z_min, z_max, dz)
         
     return stratigraphy, facies
 
@@ -1179,79 +1176,96 @@ def _summarize_multiple(stratigraphy, facies, grain_size, to_phi):
 class BarSimPseudo3D:
     """
     2.5D implementation of the multiple grain-size, process-response model BarSim.
-    
-    TODO: Rename input parameters, pick good defaults, reorder, and fill the doc.
 
     Parameters
     ----------
     initial_elevation : array-like of shape (n_y, n_x)
-        The initial elevation.
+        The initial elevation (m).
     sea_level_curve : array-like of shape (n_t, 2)
-        The inflexion points of sea level in time.
-    sediment_supply_curve : array-like of shape (n_x, n_t, 2)
-        The inflexion points of sediment supply in time.
-    spacing : array-like of shape (2,), default=(100., 100.).
-        The grid spatial resolution.
-    washover_fraction : float, default=0.5
-        ???
-    allow_storms : int, default=2
-        ???
+        The inflection points of sea level in time (yr, m).
+    sediment_supply_curve : array-like of shape (n_t, 2)
+        The inflection points of sediment supply in time (yr, m2/yr).
+    spacing : array-like of shape (2,), default=(100., 100.)
+        The grid spatial resolution (m).
     max_wave_height_fair_weather : float, default=1.5
-        ???
+        Maximum fair-weather wave height used to simulate a time-series of wave
+        height under fair-weather conditions (m).
+    allow_storms : bool, default=True
+        If True, allows storm events, otherwise only fair weather is simulated.
+    start_with_storm : bool, default=False
+        If True, starts the simulation with a storm, otherwise starts with fair-
+        weather conditions.
     max_wave_height_storm : float, default=6.
-        ???
-    tidal_amplitude : ???, default=2
-        ???
-    Tide_Acc_VAR : ???, default=100
-        ???
-    TidalSand : float, default=0.3
-        ???
-    dh_ratio_acc : ???, default=200000
-        ???
-    TDcorr_SF : float, default=1.5
-        ???
-    TDcorr_OW : float, default=1.
-        ???
-    erodibility : float, default=0.1
-        ???
-    BB_max_width : ???, default=500
-        ???
-    A_factor_BB : ???, default=5
-        ???
-    A_factor_SF : ???, default=10
-        ???
-    A_factor_SF : ???, default=10
-        ???
-    max_height_SF : float, default=1.
-        ???
-    max_height_BB : float, default=1.
-        ???
-    substrate_erosion : ???, default=1
-        ??? That parameter is never used
-    fallout_rate_backbarrier : float, default=0.
-        Constant fall-out rate of organics and fines in the backbarrier area.
-    fallout_rate_shoreface : float, default=0.0002
-        Constant fall-out rate of organics and fines in the shoreface area.
+        Maximum wave height for storm events (m).
+    tidal_amplitude : float, default=2.
+        Tidal amplitude (m).
+    min_tidal_area_for_transport : float, default=100.
+        Minimum tidal prism area required for tide induced transport to the
+        backbarrier/tidal basin (m).
     sediment_size : array-like of shape (n_grain_sizes,), default=(5, 50, 125, 250)
         Diameter of the grains of the different classes of sediments within the
-        influx of additional sediment by longshore drift.
+        influx of additional sediment by longshore drift (μm).
     sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         Fraction of the different classes of sediments within the influx of additional
-        sediment by longshore drift.
-    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2), default=(100., (0.2, 0.2, 0.3, 0.3))
+        sediment by longshore drift. Each value must be between 0 and 1.
+    initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.25, 0.25, 0.25, 0.25))
         Initial thickness of the substratum for each grain size. It can be directly
         an array representing the substratum, or a tuple (thickness, tuple with the
         proportion of each grain size), which is converted into an array during
-        initialization.
-    event : bool, default=False
-        ???
+        initialization. Make sure that the substrate is thick enough to not be
+        fully eroded during simulation.
+    erodibility : float, default=0.1
+        Multiplier or tuning parameter (c_e in equation 3 of Storms (2003)) to
+        adjust the erosion capacity.
+    washover_fraction : float, default=0.5
+        Fraction of sediments going into washover instead of shoreface. It must
+        be between 0 and 1.
+    tide_sand_fraction : float, default=0.3
+        Fraction of the sand-prone grain-size class available for tide-induced
+        transport. This rule ensures that tide-induced transport is focused on
+        the fine-grained fractions by limiting the sand-sized grain-size
+        fraction. NOTE that the correct grain-size class is limited! It must be
+        between 0 and 1.
+    depth_factor_backbarrier : float, default=5.
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        deposition.
+    depth_factor_shoreface : float, default=10.
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        deposition.
+    local_factor_shoreface : float, default=1.5
+        Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))
+        to adjust for local conditions of the sediment travel distance at the
+        shoreface.
+    local_factor_backbarrier : float, default=1.
+        Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))
+        to adjust for local conditions of the sediment travel distance at the
+        backbarrier.
+    fallout_rate_backbarrier : float, default=0.
+        Constant fall-out rate of fines (the finest sediment fraction only) in the
+        backbarrier area (mm/yr). Is only active during fair-weather conditions.
+    fallout_rate_shoreface : float, default=0.0002
+        Constant fall-out rate of fines (the finest sediment fraction only)in the
+        shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
+        active during fair-weather conditions.
+    max_width_backbarrier : float, default=500.
+        Maximum width of the backbarrier (m).
+    max_barrier_height_shoreface : float, default=1.
+        Maximum height of barrier island on the seaward side (m). Higher elevations
+        above sea level limit the deposition. The parameter refers to z_l in
+        equation 9 in Storms et al. (2002). This is a sensitive parameter, better
+        keep the default value.
+    max_barrier_height_backbarrier : float, default=1.
+        Maximum height of barrier island on the backbarrier side (m). Higher
+        elevations above sea level limit the deposition. The parameter refers to
+        z_l in equation 9 in Storms et al. (2002). This is a sensitive parameter,
+        better keep the default value.
     preinterpolate_curves: bool, default=False
-        If True, preinterpolate the sea level and sediment supply curves.
+        If True, pre-interpolates the sea level and sediment supply curves.
     monotonic: bool, default=True
         If True, uses a monotonic interpolation for sea level and sediment supply,
         otherwise uses a cubic interpolation.
     seed : int, default=42
-        Controls random number generation for reproductibility.
+        Controls random number generation for reproducibility.
 
     Attributes
     ----------
@@ -1260,88 +1274,86 @@ class BarSimPseudo3D:
         
     References
     ----------
+    Storms, J.E.A., Weltje, G.J., Van Dijke, J.J., Geel, C.R., Kroonenberg, S.B. (2002) https://doi.org/10.1306/052501720226
+        Process-response modeling of wave-dominated coastal systems: simulating evolution and stratigraphy on geological timescales.
     Storms, J.E.A. (2003) https://doi.org/10.1016/S0025-3227(03)00144-0
-    Event-based stratigraphic simulation of wave-dominated shallow-marine environments
+        Event-based stratigraphic simulation of wave-dominated shallow-marine environments
     """
     def __init__(self,
                  initial_elevation,
                  sea_level_curve,
                  sediment_supply_curve,
                  spacing=(100., 100.),
-                 washover_fraction=0.5,
-                 allow_storms=True,
                  max_wave_height_fair_weather=1.5,
+                 allow_storms=True,
+                 start_with_storm=False,
                  max_wave_height_storm=6.,
                  tidal_amplitude=2.,
-                 Tide_Acc_VAR=100,
-                 TidalSand=0.3,
-                 dh_ratio_acc=200000,
-                 TDcorr_SF=1.5,
-                 TDcorr_OW=1.,
-                 erodibility=0.1,
-                 BB_max_width=500,
-                 A_factor_BB=5,
-                 A_factor_SF=10,
-                 max_height_SF=1.,
-                 max_height_BB=1.,
-                 substrate_erosion=1,
-                 fallout_rate_backbarrier=0.,
-                 fallout_rate_shoreface=0.0002,
+                 min_tidal_area_for_transport=100.,
                  sediment_size=(5., 50., 125., 250.),
                  sediment_fraction=(0.25, 0.25, 0.25, 0.25),
-                 initial_substratum=(100., (0.2, 0.2, 0.3, 0.3)),
-                 event=False,
+                 initial_substratum=(200., (0.25, 0.25, 0.25, 0.25)),
+                 erodibility=0.1,
+                 washover_fraction=0.5,
+                 tide_sand_fraction=0.3,
+                 depth_factor_backbarrier=5.,
+                 depth_factor_shoreface=10.,
+                 local_factor_shoreface=1.5,
+                 local_factor_backbarrier=1.,
+                 fallout_rate_backbarrier=0.,
+                 fallout_rate_shoreface=0.0002,
+                 max_width_backbarrier=500.,
+                 max_barrier_height_shoreface=1.,
+                 max_barrier_height_backbarrier=1.,
                  preinterpolate_curves=False,
                  monotonic=True,
-                 n_jobs=-1,
                  seed=42):
         
-        self.initial_elevation = np.array(initial_elevation)
-        self.sea_level_curve = np.array(sea_level_curve)
-        self.sediment_supply_curve = np.array(sediment_supply_curve)
+        self.initial_elevation = np.asarray(initial_elevation)
+        self.sea_level_curve = np.asarray(sea_level_curve)
+        self.sediment_supply_curve = np.asarray(sediment_supply_curve)
         self.spacing = spacing
-        self.washover_fraction = washover_fraction
-        self.allow_storms = allow_storms
         self.max_wave_height_fair_weather = max_wave_height_fair_weather
+        self.allow_storms = allow_storms
+        self.start_with_storm = start_with_storm
         self.max_wave_height_storm = max_wave_height_storm
         self.tidal_amplitude = tidal_amplitude
-        self.Tide_Acc_VAR = Tide_Acc_VAR
-        self.TidalSand = TidalSand
-        self.dh_ratio_acc = dh_ratio_acc
-        self.TDcorr_SF = TDcorr_SF
-        self.TDcorr_OW = TDcorr_OW
-        self.erodibility = erodibility
-        self.BB_max_width = BB_max_width
-        self.A_factor_BB = A_factor_BB
-        self.A_factor_SF = A_factor_SF
-        self.max_height_SF = max_height_SF
-        self.max_height_BB = max_height_BB
-        self.substrate_erosion = substrate_erosion
-        self.fallout_rate_backbarrier = fallout_rate_backbarrier
-        self.fallout_rate_shoreface = fallout_rate_shoreface
-        self.sediment_size = np.array(sediment_size)
-        self.sediment_fraction = np.array(sediment_fraction)
+        self.min_tidal_area_for_transport = min_tidal_area_for_transport
+        self.sediment_size = np.asarray(sediment_size)
+        self.sediment_fraction = np.asarray(sediment_fraction)
         if (len(initial_substratum) == 2
             and len(initial_substratum[1]) == len(sediment_size)):
             self.initial_substratum = np.full((len(sediment_size), initial_elevation.shape[1]),
                                               initial_substratum[0])
-            self.initial_substratum *= np.array(initial_substratum[1])[:, np.newaxis]
+            self.initial_substratum *= np.asarray(initial_substratum[1])[:, np.newaxis]
         else:
-            self.initial_substratum = np.array(initial_substratum)
-        self.event = event
+            self.initial_substratum = np.asarray(initial_substratum)
+        self.erodibility = erodibility
+        self.washover_fraction = washover_fraction
+        self.tide_sand_fraction = tide_sand_fraction
+        self.depth_factor_backbarrier = depth_factor_backbarrier
+        self.depth_factor_shoreface = depth_factor_shoreface
+        self.local_factor_shoreface = local_factor_shoreface
+        self.local_factor_backbarrier = local_factor_backbarrier
+        self.fallout_rate_backbarrier = fallout_rate_backbarrier
+        self.fallout_rate_shoreface = fallout_rate_shoreface
+        self.max_width_backbarrier = max_width_backbarrier
+        self.max_barrier_height_shoreface = max_barrier_height_shoreface
+        self.max_barrier_height_backbarrier = max_barrier_height_backbarrier
         self.preinterpolate_curves = preinterpolate_curves
         self.monotonic = monotonic
-        self.n_jobs = n_jobs
         self.seed = seed
         
-    def _preinterpolate_curves(self, duration, dt_min, dt_fw):
+    def _preinterpolate_curves(self, run_time, dt_fair_weather, dt_storm):
         """
         Preinterpolate the sea level and sediment supply curves using a cubic interpolation
         before using them in Numba.
         TODO: Would be better to have a cubic interpolation in Numba.
         """
-        dt_average = (dt_min + dt_fw)//2 - 1 if self.allow_storms == True else dt_min
-        n_time_steps = int(duration/dt_average) + 1
+        if self.allow_storms == True:
+            n_time_steps = math.ceil(2*run_time/(dt_fair_weather + dt_storm)) + 1
+        else:
+            n_time_steps = math.ceil(run_time/dt_fair_weather) + 1
         
         if self.monotonic == False:
             sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
@@ -1351,7 +1363,7 @@ class BarSimPseudo3D:
             sea_level_function = interpolate.PchipInterpolator(self.sea_level_curve[:, 0],
                                                                self.sea_level_curve[:, 1])
         sea_level_interp = np.empty((n_time_steps, 2))
-        sea_level_interp[:, 0] = np.linspace(0., duration, n_time_steps)
+        sea_level_interp[:, 0] = np.linspace(0., run_time, n_time_steps)
         sea_level_interp[:, 1] = sea_level_function(sea_level_interp[:, 0])
         
         sediment_supply_interp = np.empty((len(self.sediment_supply_curve), n_time_steps, 2))
@@ -1368,18 +1380,24 @@ class BarSimPseudo3D:
         
         return sea_level_interp, sediment_supply_interp
     
-    def run(self, z_min, z_max, z_step, duration=10000., dt_min=1., dt_fw=15.):
+    def run(self, z_min, z_max, dz, run_time=10000., dt_fair_weather=15., dt_storm=1.):
         """
-        Runs BarSim for a given duration.
+        Runs BarSim for a given run time.
 
         Parameters
         ----------
-        duration : float, default=10000.
-            Duration of the run (in years).
-        dt_min : float, default=10000.
-            Minimum time step (in years).
-        dt_fw : float, default=10000.
-            ??? (in years).
+        z_min : float
+            Lower border of the grid (m).
+        z_max : float
+            Upper border of the grid (m).
+        dz : float
+            Resolution of the grid (m).
+        run_time : float, default=10000.
+            Duration of the run (yr).
+        dt_fair_weather : float, default=15.
+            Time step in fair weather conditions (yr).
+        dt_storm : float, default=1.
+            Time step during a storm (yr).
 
         Returns
         -------
@@ -1387,24 +1405,26 @@ class BarSimPseudo3D:
             Simulator with a `record_` attribute.
         """
         if self.preinterpolate_curves == True:
-            sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(duration, dt_min, dt_fw)
+            sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(run_time, dt_fair_weather, dt_storm)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
             
-        stratigraphy, facies = _run_multiple(self.initial_elevation, self.initial_substratum, sea_level_curve,
-                                             sediment_supply_curve, duration, self.spacing[1], self.washover_fraction,
-                                             self.allow_storms, self.max_wave_height_fair_weather, self.max_wave_height_storm,
-                                             dt_min, dt_fw, self.tidal_amplitude, self.Tide_Acc_VAR, self.TidalSand,
-                                             self.dh_ratio_acc, self.TDcorr_SF, self.TDcorr_OW, self.erodibility,
-                                             self.BB_max_width, self.A_factor_BB, self.A_factor_SF, self.max_height_SF,
-                                             self.max_height_BB, self.substrate_erosion, self.fallout_rate_backbarrier,
-                                             self.fallout_rate_shoreface, self.sediment_size, self.sediment_fraction,
-                                             self.event, z_min, z_max, z_step, self.seed)
+        stratigraphy, facies = _run_multiple(self.initial_elevation, sea_level_curve, sediment_supply_curve,
+                                             self.spacing[1], run_time, dt_fair_weather, dt_storm, self.max_wave_height_fair_weather,
+                                             self.allow_storms, self.start_with_storm, self.max_wave_height_storm,
+                                             self.tidal_amplitude, self.min_tidal_area_for_transport, self.sediment_size,
+                                             self.sediment_fraction, self.initial_substratum, self.erodibility,
+                                             self.washover_fraction, self.tide_sand_fraction, self.depth_factor_backbarrier,
+                                             self.depth_factor_shoreface, self.local_factor_shoreface,
+                                             self.local_factor_backbarrier, self.fallout_rate_backbarrier,
+                                             self.fallout_rate_shoreface, self.max_width_backbarrier,
+                                             self.max_barrier_height_shoreface, self.max_barrier_height_backbarrier,
+                                             z_min, z_max, dz, self.seed)
         self.record_ = xr.Dataset(
             data_vars={
                 'Stratigraphy': (
                     ('Grain size', 'Z', 'Y', 'X'),
-                    stratigraphy/z_step,
+                    stratigraphy/dz,
                     {'units': '-', 'description': 'fraction of each grain size in a cell'},
                 ),
                 'Facies': (
@@ -1420,8 +1440,8 @@ class BarSimPseudo3D:
                 'Y': np.linspace(self.spacing[0]/2.,
                                  self.spacing[0]*(stratigraphy.shape[2] - 0.5),
                                  stratigraphy.shape[2]),
-                'Z': np.linspace(z_min + z_step/2.,
-                                 z_max - z_step/2.,
+                'Z': np.linspace(z_min + dz/2.,
+                                 z_max - dz/2.,
                                  stratigraphy.shape[1]),
                 'Grain size': self.sediment_size,
                 'Environment': ['none', 'substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
