@@ -785,7 +785,7 @@ class BarSim2D:
         Constant fall-out rate of fines (the finest sediment fraction only) in the
         backbarrier area (mm/yr). Is only active during fair-weather conditions.
     fallout_rate_shoreface : float, default=0.0002
-        Constant fall-out rate of fines (the finest sediment fraction only)in the
+        Constant fall-out rate of fines (the finest sediment fraction only) in the
         shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
         active during fair-weather conditions.
     max_width_backbarrier : float, default=500.
@@ -1244,7 +1244,7 @@ class BarSimPseudo3D:
         Constant fall-out rate of fines (the finest sediment fraction only) in the
         backbarrier area (mm/yr). Is only active during fair-weather conditions.
     fallout_rate_shoreface : float, default=0.0002
-        Constant fall-out rate of fines (the finest sediment fraction only)in the
+        Constant fall-out rate of fines (the finest sediment fraction only) in the
         shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
         active during fair-weather conditions.
     max_width_backbarrier : float, default=500.
