@@ -15,7 +15,7 @@ You can directly install pyBarSim from GitHub using pip:
 Basic use:
 
 ```
-import numpy as np
+import numpy as n
 from pybarsim import BarSim2D
 
 # Set the parameters
