@@ -723,7 +723,7 @@ class BarSim2D:
     initial_elevation : array-like of shape (n_x,)
         The initial elevation (m).
     sea_level_curve : array-like of shape (n_t, 2)
-        The inflection points of sea level in time (yr, m).
+        The inflection points of relative sea level in time (yr, m).
     sediment_supply_curve : array-like of shape (n_t, 2)
         The inflection points of sediment supply in time (yr, m2/yr).
     spacing : float, default=100.
@@ -748,7 +748,8 @@ class BarSim2D:
         influx of additional sediment by longshore drift (μm).
     sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         Fraction of the different classes of sediments within the influx of additional
-        sediment by longshore drift. Each value must be between 0 and 1.
+        sediment by longshore drift. Each value must be between 0 and 1, and the
+        sum of all values must add up to 1.
     initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.25, 0.25, 0.25, 0.25))
         Initial thickness of the substratum for each grain size. It can be directly
         an array representing the substratum, or a tuple (thickness, tuple with the
@@ -771,7 +772,7 @@ class BarSim2D:
         Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
         deposition.
     depth_factor_shoreface : float, default=10.
-        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to shoreface
         deposition.
     local_factor_shoreface : float, default=1.5
         Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))
@@ -1182,7 +1183,7 @@ class BarSimPseudo3D:
     initial_elevation : array-like of shape (n_y, n_x)
         The initial elevation (m).
     sea_level_curve : array-like of shape (n_t, 2)
-        The inflection points of sea level in time (yr, m).
+        The inflection points of relative sea level in time (yr, m).
     sediment_supply_curve : array-like of shape (n_t, 2)
         The inflection points of sediment supply in time (yr, m2/yr).
     spacing : array-like of shape (2,), default=(100., 100.)
@@ -1207,7 +1208,8 @@ class BarSimPseudo3D:
         influx of additional sediment by longshore drift (μm).
     sediment_fraction : array-like of shape (n_grain_sizes,), default=(0.25, 0.25, 0.25, 0.25)
         Fraction of the different classes of sediments within the influx of additional
-        sediment by longshore drift. Each value must be between 0 and 1.
+        sediment by longshore drift. Each value must be between 0 and 1, and the
+        sum of all values must add up to 1.
     initial_substratum : array-like of shape (n_grain_sizes, n_x) or (2,), default=(100., (0.25, 0.25, 0.25, 0.25))
         Initial thickness of the substratum for each grain size. It can be directly
         an array representing the substratum, or a tuple (thickness, tuple with the
@@ -1230,7 +1232,7 @@ class BarSimPseudo3D:
         Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
         deposition.
     depth_factor_shoreface : float, default=10.
-        Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
+        Parameter `A` in equation 9 (Storms et al., 2002) applied to shoreface
         deposition.
     local_factor_shoreface : float, default=1.5
         Multiplier or tuning parameter (c_g in equations 13 and 14 of Storms (2003))

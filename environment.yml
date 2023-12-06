@@ -1,0 +1,16 @@
+name: pybarsim
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python
+  - pip
+  - numpy
+  - scipy
+  - numba
+  - xarray
+  - pyvista
+  - pip:
+    - git+https://github.com/grongier/pybarsim.git

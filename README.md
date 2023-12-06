@@ -2,11 +2,13 @@
 
 pyBarSim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/grongier/pybarsim/master?filepath=examples)
+
 ## Installation
 
-You can directly install pyBarSim from GitLab using pip:
+You can directly install pyBarSim from GitHub using pip:
 
-    pip install git+https://gitlab.tudelft.nl/grongier/pybarsim.git
+    pip install git+https://github.com/grongier/pybarsim.git
 
 ## Usage
 
@@ -32,7 +34,7 @@ barsim.summarize()
 barsim.record_['Mean grain size'].plot(figsize=(12, 4))
 ```
 
-For a more complete example, see the Jupyter notebook [using_pybarsim.ipynb](examples/using_pybarsim.ipynb).
+For a more complete example, see the Jupyter notebook [using_pybarsim.ipynb](examples/using_pybarsim.ipynb) or the Binder link above.
 
 ## Citation
 
