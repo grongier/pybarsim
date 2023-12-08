@@ -10,6 +10,7 @@ dependencies:
   - numpy
   - scipy
   - numba
+  - matplotlib
   - xarray
   - pyvista
   - pip:

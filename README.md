@@ -6,7 +6,11 @@ pyBarSim is a Python package to simulate wave-dominated shallow-marine environme
 
 ## Installation
 
-You can directly install pyBarSim from GitHub using pip:
+You can directly install pyBarSim from pip:
+
+    pip install pybarsim
+
+Or from GitHub using pip:
 
     pip install git+https://github.com/grongier/pybarsim.git
 
@@ -17,6 +21,7 @@ Basic use:
 ```
 import numpy as np
 from pybarsim import BarSim2D
+import matplotlib.pyplot as plt
 
 # Set the parameters
 run_time = 10000.
@@ -32,6 +37,7 @@ barsim.regrid(900., 1000., 0.5)
 barsim.summarize()
 # Plot the median grid size in the regular grid
 barsim.record_['Mean grain size'].plot(figsize=(12, 4))
+plt.show()
 ```
 
 For a more complete example, see the Jupyter notebook [using_pybarsim.ipynb](examples/using_pybarsim.ipynb) or the Binder link above.
