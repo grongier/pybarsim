@@ -42,7 +42,7 @@ with open('README.md') as f:
 
 setup(
     name='pyBarSim',
-    version='v0.0.1',
+    version='v0.0.2',
     description='Python package to simulate wave-dominated shallow-marine environments',
     long_description=long_description,
     long_description_content_type='text/markdown',
