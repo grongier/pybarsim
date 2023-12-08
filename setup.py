@@ -36,13 +36,19 @@ from setuptools import setup, find_packages
 from os import path
 
 
+# Get the long description from the README file
+with open('README.md') as f:
+    long_description = f.read()
+
 setup(
     name='pyBarSim',
     version='v0.0.1',
     description='Python package to simulate wave-dominated shallow-marine environments',
-    url='https://gitlab.tudelft.nl/grongier/pybarsim',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    url='https://github.com/grongier/pybarsim',
     author='Guillaume Rongier',
-    license='none',
+    license='MIT',
     classifiers=[
         # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
         'Development Status :: 4 - Beta',
