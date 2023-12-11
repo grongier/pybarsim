@@ -1,8 +1,8 @@
 # pyBarSim
 
-pyBarSim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
+[![DOI:10.4121/60f148ee-a793-4d16-b1b6-c03442403db1.v1](http://img.shields.io/badge/DOI-10.4121/60f148ee--a793--4d16--b1b6--c03442403db1.v1-B31B1B.svg)](https://doi.org/10.4121/60f148ee-a793-4d16-b1b6-c03442403db1.v1) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/grongier/pybarsim/master?filepath=examples)
 
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/grongier/pybarsim/master?filepath=examples)
+pyBarSim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
 
 ## Installation
 
