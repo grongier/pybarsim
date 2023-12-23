@@ -4,6 +4,8 @@
 
 pyBarSim is a Python package to simulate wave-dominated shallow-marine environments using [Storms (2003)](https://doi.org/10.1016/S0025-3227(03)00144-0)'s BarSim.
 
+![](https://raw.githubusercontent.com/grongier/pybarsim/master/image.jpg)
+
 ## Installation
 
 You can directly install pyBarSim from pip:
@@ -34,7 +36,7 @@ barsim.run(run_time=10000., dt_fair_weather=15., dt_storm=1.)
 # Interpolate the outputs into a regular grid
 barsim.regrid(900., 1000., 0.5)
 # Compute the mean grain size
-barsim.summarize()
+barsim.finalize(on='record')
 # Plot the median grid size in the regular grid
 barsim.record_['Mean grain size'].plot(figsize=(12, 4))
 plt.show()

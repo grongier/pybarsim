@@ -1,8 +1,4 @@
-"""Setup for the pyBarSim package
-
-See:
-https://github.com/pypa/sampleproject/blob/master/setup.py
-"""
+"""Setup for the pyBarSim package"""
 
 # MIT License
 
@@ -42,7 +38,7 @@ with open('README.md') as f:
 
 setup(
     name='pyBarSim',
-    version='v0.0.2',
+    version='v0.0.3',
     description='Python package to simulate wave-dominated shallow-marine environments',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -63,7 +59,7 @@ setup(
     keywords='stratigraphic modeling, shallow-marine, event-based',
     packages=find_packages(),
     python_requires=">=3.7",
-    install_requires=['numpy', 'scipy', 'numba', 'xarray', 'pyvista'],
+    install_requires=['numpy', 'scipy', 'numba', 'xarray', 'matplotlib', 'pyvista'],
     project_urls={  # Optional
         'Reference': 'https://doi.org/10.1016/S0025-3227(03)00144-0',
         'Source': 'https://gitlab.tudelft.nl/grongier/pybarsim',

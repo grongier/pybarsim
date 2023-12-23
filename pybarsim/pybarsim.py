@@ -33,13 +33,16 @@ import numpy as np
 from scipy import interpolate
 import numba as nb
 import xarray as xr
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 import pyvista as pv
 
 
 ################################################################################
 # BarSim 2D
 
-@nb.jit(nopython=True)
+@nb.njit
 def _initialize_fluxes(local_factor_shoreface, local_factor_backbarrier, sediment_size):
     """
     Adopted from Guillen and Hoekstra 1996, 1997, but slightly different (this
@@ -54,7 +57,7 @@ def _initialize_fluxes(local_factor_shoreface, local_factor_backbarrier, sedimen
     return flux_shoreface_basic, flux_overwash_basic
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _correct_travel_distance(allow_storms, is_storm, flux_shoreface_basic, flux_overwash_basic,
                              max_wave_height, n_grain_sizes, correction_factor=0.25):
     """
@@ -81,7 +84,7 @@ def _correct_travel_distance(allow_storms, is_storm, flux_shoreface_basic, flux_
     return flux_shoreface, flux_overwash
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _update_fluxes(allow_storms, is_storm, time, max_wave_height_storm, max_wave_height_fair_weather,
                    dt_fair_weather, dt_storm, flux_shoreface_basic, flux_overwash_basic, n_grain_sizes):
     """
@@ -116,7 +119,7 @@ def _update_fluxes(allow_storms, is_storm, time, max_wave_height_storm, max_wave
     return max_wave_height, T, dt, time, flux_shoreface, flux_overwash
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _compute_shields_parameter(sediment_size):
     """
     Computes the dimensionless threshold orbital velocity, a Shields-type parameter
@@ -146,7 +149,7 @@ def _compute_shields_parameter(sediment_size):
     return dimless_thres_orbital_velocity
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _compute_orbital_velocity(elevation, sea_level, max_wave_height, T, dimless_thres_orbital_velocity,
                               sediment_size, i_coastline):
     """
@@ -174,7 +177,7 @@ def _compute_orbital_velocity(elevation, sea_level, max_wave_height, T, dimless_
     return orbital_velocity, orbital_velocity_max
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _decompose_domain(elevation, sea_level, max_wave_height, T, sediment_size,
                       dimless_thres_orbital_velocity):
     """
@@ -210,7 +213,7 @@ def _decompose_domain(elevation, sea_level, max_wave_height, T, sediment_size,
     return i_mainland, i_backbarrier, i_coastline, i_wavebase
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _classify_facies(is_storm, i_mainland, i_backbarrier, i_coastline, i_wavebase,
                      i_wavebase_event, i_wavebase_fw, n_x):
     """
@@ -245,7 +248,7 @@ def _classify_facies(is_storm, i_mainland, i_backbarrier, i_coastline, i_wavebas
     return facies, i_wavebase_event, i_wavebase_fw
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wavebase):
     """
     Erodes the stratigraphic record along the shoreface and shelf.
@@ -263,7 +266,7 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
             erosion_sum = 0.
             sum_strat = np.zeros(n_grain_sizes)
             t = 0
-            while erosion_total[i] > erosion_sum:
+            while erosion_total[i] > erosion_sum and t < stratigraphy.shape[1]:
                 t += 1
                 for j in range(n_grain_sizes):
                     erosion_sum += stratigraphy[j, i_time - t, i]
@@ -273,7 +276,11 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
             for j in range(n_grain_sizes):
                 last_layer_thickness += stratigraphy[j, i_time - t, i]
             
-            fraction_left = (erosion_sum - erosion_total[i])/last_layer_thickness
+            if last_layer_thickness > 0.:
+                fraction_left = (erosion_sum - erosion_total[i])/last_layer_thickness
+            else:
+                # Not sure if that's right, but otherwise we run into troubles
+                fraction_left = 0.
             for l in range(1, t): # CHECK THIS LINE tmp OR tmp-1???
                 for j in range(n_grain_sizes):
                     stratigraphy[j, i_time - l, i] = 0.
@@ -281,8 +288,9 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
                 stratigraphy[j, i_time - t, i] *= fraction_left
                 erosion[j, i] = sum_strat[j] - stratigraphy[j, i_time - t, i]
 
-        else:
+        elif layer_thickness > 0.:
             # TODO: What if layer_thickness is equal to 0?
+            #       -> Line above seems to work, but this needs to be checked
             fraction_left = erosion_total[i]/layer_thickness
             for j in range(n_grain_sizes):
                 erosion[j, i] = fraction_left*stratigraphy[j, i_time - 1, i]
@@ -291,7 +299,7 @@ def _erode_stratigraphy(stratigraphy, erosion_total, i_time, i_coastline, i_wave
     return stratigraphy, erosion
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _erode(elevation, stratigraphy, sea_level, erodibility, max_wave_height,
            max_wave_height_fair_weather, i_time, i_coastline, i_wavebase):
     """
@@ -307,7 +315,7 @@ def _erode(elevation, stratigraphy, sea_level, erodibility, max_wave_height,
     return stratigraphy, erosion
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, washover_fraction,
                        max_width_backbarrier, sediment_fraction, i_mainland, i_backbarrier,
                        i_coastline, i_wavebase, dt, spacing):
@@ -337,7 +345,7 @@ def _distribute_fluxes(erosion, sediment_supply, sea_level, sea_level_prev, wash
     return total_flux, total_flux_washover, total_flux_shoreface
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
                       sea_level_prev, washover_fraction, max_width_backbarrier,
                       depth_factor_backbarrier, max_barrier_height_backbarrier,
@@ -368,7 +376,7 @@ def _deposit_washover(elevation, total_flux_washover, flux_overwash, sea_level,
     return sediment_flux, deposition_washover
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_level,
                          sea_level_prev, washover_fraction, max_width_backbarrier,
                          i_backbarrier, i_coastline, i_mainland, spacing):
@@ -390,7 +398,7 @@ def _redistribute_fluxes(sediment_flux, total_flux, total_flux_shoreface, sea_le
     return sediment_flux
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tidal_amplitude,
                    min_tidal_area_for_transport, tide_sand_fraction, fallout_rate_backbarrier,
                    is_storm, i_time, i_backbarrier, i_mainland, i_coastline, dt, spacing):
@@ -470,7 +478,7 @@ def _deposit_tidal(elevation, deposition_washover, sediment_flux, sea_level, tid
     return sediment_flux, deposition_washover, deposition_tidal
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level,
                        max_barrier_height_shoreface, fallout_rate_shoreface,
                        depth_factor_shoreface, i_time, i_coastline, spacing, dt):
@@ -494,7 +502,7 @@ def _deposit_shoreface(elevation, sediment_flux, flux_shoreface, sea_level,
     return sediment_flux, deposition_shoreface
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _update_elevation(elevation, erosion, deposition_washover, deposition_tidal,
                       deposition_shoreface, i_time, i_mainland):
     """
@@ -507,7 +515,7 @@ def _update_elevation(elevation, erosion, deposition_washover, deposition_tidal,
     return elevation
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _deposit_stratigraphy(stratigraphy, deposition_washover, deposition_tidal,
                           deposition_shoreface, i_time, i_mainland):
     """
@@ -520,7 +528,7 @@ def _deposit_stratigraphy(stratigraphy, deposition_washover, deposition_tidal,
     return stratigraphy
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
              flux_shoreface, sea_level, washover_fraction, max_width_backbarrier,
              depth_factor_backbarrier, max_barrier_height_backbarrier, tidal_amplitude,
@@ -558,7 +566,7 @@ def _deposit(elevation, stratigraphy, erosion, sediment_supply, flux_overwash,
     return elevation, stratigraphy
     
 
-@nb.jit(nopython=True)
+@nb.njit
 def _run(initial_elevation, sea_level_curve, sediment_supply_curve, spacing,
          run_time, dt_fair_weather, dt_storm, max_wave_height_fair_weather,
          allow_storms, start_with_storm, max_wave_height_storm, tidal_amplitude,
@@ -635,7 +643,7 @@ def _run(initial_elevation, sea_level_curve, sediment_supply_curve, spacing,
             elevation[:i_time], stratigraphy[:, :i_time], facies[:i_time])
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _compute_mean_grain_size(stratigraphy, sediment_size):
     """
     Computes the mean grain size from the stratigraphy.
@@ -652,7 +660,7 @@ def _compute_mean_grain_size(stratigraphy, sediment_size):
     return mean
 
 
-@nb.jit(nopython=True)
+@nb.njit
 def _compute_std_grain_size(stratigraphy, grain_size, to_phi):
     """
     Computes the sorting term from the stratigraphy.
@@ -672,11 +680,25 @@ def _compute_std_grain_size(stratigraphy, grain_size, to_phi):
                 for j in range(stratigraphy.shape[0]):
                     std[k, i] += stratigraphy[j, k, i]*(grain_size[j] - mean)**2
                 std[k, i] = math.sqrt(std[k, i]/stratigraphy_total)
-                
+
     return std
 
 
-@nb.jit(nopython=True)
+@nb.njit()
+def _compute_horizons(elevation):
+    """
+    Computes susurface horizons from the evolution of elevation through time.
+    """
+    horizons = np.empty(elevation.shape)
+    horizons[-1] = elevation[-1]
+    for j in range(elevation.shape[0] - 2, -1, -1):
+        for i in range(elevation.shape[1]):
+            horizons[j, i] = min(horizons[j + 1, i], elevation[j, i])
+
+    return horizons
+
+
+@nb.njit
 def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max, dz):
     """
     Interpolates the time stratigraphy on a regular grid in space.
@@ -714,6 +736,151 @@ def _regrid_stratigraphy(elevation, time_stratigraphy, time_facies, z_min, z_max
     return stratigraphy, facies
 
 
+@nb.njit()
+def _subsample_stratigraphy(time, sea_level, sediment_supply, elevation,
+                            horizons, stratigraphy, facies, step):
+    """
+    Sub-samples the stratigraphy in time.
+    """
+    size = int(math.ceil(horizons.shape[0]/step))
+    if horizons.shape[0]%step != 1 and step != 1:
+        size += 1
+
+    sub_time = np.zeros(size)
+    sub_sea_level = np.zeros(size)
+    sub_sediment_supply = np.zeros(size)
+    sub_elevation = np.zeros((size, elevation.shape[1]))
+    sub_elevation[0] = elevation[0]
+    sub_horizons = np.zeros((size, horizons.shape[1]))
+    sub_horizons[0] = horizons[0]
+    sub_stratigraphy = np.zeros((stratigraphy.shape[0],
+                                 size,
+                                 stratigraphy.shape[2]))
+    sub_stratigraphy[:, 0] = stratigraphy[:, 0]
+    sub_facies = np.zeros((7, size, facies.shape[1]))
+    for k in range(facies.shape[1]):
+        sub_facies[facies[0, k] - 1, 0] = 1
+
+    for i in range(1, horizons.shape[0]):
+
+        j = int((i - 1)/step) + 1
+        sub_sediment_supply[j] += sediment_supply[i]
+        sub_stratigraphy[:, j] += stratigraphy[:, i]
+        for k in range(facies.shape[1]):
+            sub_facies[facies[i, k] - 1, j, k] += stratigraphy[:, i, k].sum()
+
+        if i%step == 0 or i == horizons.shape[0] - 1:
+            sub_time[j] = time[i]
+            sub_sea_level[j] = sea_level[i]
+            sub_elevation[j] = elevation[i]
+            sub_horizons[j] = horizons[i]
+            for k in range(facies.shape[1]):
+                total = sub_facies[:, j, k].sum()
+                if total > 0.:
+                    sub_facies[:, j, k] /= total
+
+    return (sub_time, sub_sea_level, sub_sediment_supply, sub_elevation,
+            sub_horizons, sub_stratigraphy, sub_facies)
+
+
+@nb.njit
+def _sub_zero_extremity(layer, cond_layer):
+    """
+    Substitutes zero cells with the neighboring value if one is non-zero. Used
+    for visualization.
+    """
+    new_layer = np.empty(len(layer))
+    for i in range(len(layer)):
+        if cond_layer[i] == 0.:
+            if i > 0 and cond_layer[i - 1] > 0.:
+                new_layer[i] = layer[i - 1]
+            elif i < len(cond_layer) - 1 and cond_layer[i + 1] > 0.:
+                new_layer[i] = layer[i + 1]
+            else:
+                new_layer[i] = layer[i]
+        else:
+            new_layer[i] = layer[i]
+
+    return new_layer
+
+
+@nb.njit
+def _strip_zero_neighbors(layer, cond_layer):
+    """
+    Converts zero cells to a given value if one of the neighboring values is zero.
+    Used for visualization.
+    """
+    new_layer = np.empty(len(layer))
+    for i in range(len(layer)):
+        if (cond_layer[i] == 0. and i > 0 and cond_layer[i - 1] == 0. and
+            i < len(cond_layer) - 1 and cond_layer[i + 1] == 0.):
+            new_layer[i] = np.nan
+        elif cond_layer[i] == 0. and i == 0 and cond_layer[i + 1] == 0.:
+            new_layer[i] = np.nan
+        elif cond_layer[i] == 0. and i == len(cond_layer) - 1 and cond_layer[i - 1] == 0.:
+            new_layer[i] = np.nan
+        else:
+            new_layer[i] = layer[i]
+
+    return new_layer
+
+
+def _finalize_stratigraphy(dataset, dim, to_phi):
+    """
+    Finalizes the stratigraphy.
+    """
+    dataset['Mean grain size'] = (
+        (dim, 'X'),
+        _compute_mean_grain_size(dataset['Deposits'].values, dataset['Grain size'].values),
+        {
+            'units': 'micrometer',
+            'description': 'mean of the grain-size distribution',
+        },
+    )
+    dataset['Sorting term'] = (
+        (dim, 'X'),
+        _compute_std_grain_size(dataset['Deposits'].values, dataset['Grain size'].values, to_phi),
+        {
+            'units': 'phi' if to_phi == True else 'micrometer',
+            'description': 'standard deviation of the grain-size distribution',
+        },
+    )
+
+    return dataset
+
+
+def _finalize_facies(dataset, dim):
+    """
+    Finalizes the facies.
+    """
+    dataset['Major facies'] = (
+        (dim, 'X'),
+        np.argmax(dataset['Facies'].values, axis=0),
+        {
+            'units': '',
+            'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore',
+        },
+    )
+
+    return dataset
+
+
+def _finalize_elevation(dataset):
+    """
+    Finalizes the elevation.
+    """
+    dataset['Horizons'] = (
+        ('Time', 'X'),
+        _compute_horizons(dataset['Elevation'].values),
+        {
+            'units': 'meter',
+            'description': 'elevation of the horizons in the subsurface',
+        },
+    )
+
+    return dataset
+
+
 class BarSim2D:
     """
     2D implementation of the multiple grain-size, process-response model BarSim.
@@ -722,10 +889,12 @@ class BarSim2D:
     ----------
     initial_elevation : array-like of shape (n_x,)
         The initial elevation (m).
-    sea_level_curve : array-like of shape (n_t, 2)
-        The inflection points of relative sea level in time (yr, m).
-    sediment_supply_curve : array-like of shape (n_t, 2)
-        The inflection points of sediment supply in time (yr, m2/yr).
+    sea_level_curve : float or array-like of shape (n_t, 2)
+        The inflection points of relative sea level in time (yr, m) or a constant
+        value of relative sea level (m).
+    sediment_supply_curve : float or array-like of shape (n_t, 2)
+        The inflection points of sediment supply in time (yr, m2/yr) or a constant
+        value of sediment supply (m2/yr).
     spacing : float, default=100.
         The grid spatial resolution (m).
     max_wave_height_fair_weather : float, default=1.5
@@ -784,10 +953,10 @@ class BarSim2D:
         backbarrier.
     fallout_rate_backbarrier : float, default=0.
         Constant fall-out rate of fines (the finest sediment fraction only) in the
-        backbarrier area (mm/yr). Is only active during fair-weather conditions.
+        backbarrier area (m/yr). Is only active during fair-weather conditions.
     fallout_rate_shoreface : float, default=0.0002
         Constant fall-out rate of fines (the finest sediment fraction only) in the
-        shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
+        shoreface-shelf (m/yr), representing pelagic sedimentation. It is only
         active during fair-weather conditions.
     max_width_backbarrier : float, default=500.
         Maximum width of the backbarrier (m).
@@ -801,20 +970,20 @@ class BarSim2D:
         elevations above sea level limit the deposition. The parameter refers to
         z_l in equation 9 in Storms et al. (2002). This is a sensitive parameter,
         better keep the default value.
-    preinterpolate_curves: bool, default=False
-        If True, pre-interpolates the sea level and sediment supply curves.
-    monotonic: bool, default=True
-        If True, uses a monotonic interpolation for sea level and sediment supply,
-        otherwise uses a cubic interpolation.
+    curve_preinterpolation: str, default=None
+        If not None, pre-interpolates the sea level and sediment supply curves.
+        The value determines the type of interpolation used, either ‘linear’,
+        ‘nearest’, ‘nearest-up’, ‘zero’, ‘slinear’, ‘quadratic’, ‘cubic’,
+        ‘previous’, ‘next’, or `monotonic`.
     seed : int, default=42
         Controls random number generation for reproducibility.
 
     Attributes
     ----------
     sequence_ : xarray.Dataset
-        Dataset containing the evolution of the elevation and stratigraphy through time.
+        Dataset containing the elevation and stratigraphy in time.
     record_ : xarray.Dataset
-        Dataset containing the final stratigraphy.
+        Dataset containing the final stratigraphy interpolated onto a regular grid.
         
     References
     ----------
@@ -849,13 +1018,18 @@ class BarSim2D:
                  max_width_backbarrier=500.,
                  max_barrier_height_shoreface=1.,
                  max_barrier_height_backbarrier=1.,
-                 preinterpolate_curves=False,
-                 monotonic=True,
+                 curve_preinterpolation=None,
                  seed=42):
         
         self.initial_elevation = np.asarray(initial_elevation)
-        self.sea_level_curve = np.asarray(sea_level_curve)
-        self.sediment_supply_curve = np.asarray(sediment_supply_curve)
+        if isinstance(sea_level_curve, (int, float)):
+            self.sea_level_curve = np.array([(0., sea_level_curve)])
+        else:
+            self.sea_level_curve = np.asarray(sea_level_curve)
+        if isinstance(sediment_supply_curve, (int, float)):
+            self.sediment_supply_curve = np.array([(0., sediment_supply_curve)])
+        else:
+            self.sediment_supply_curve = np.asarray(sediment_supply_curve)
         self.spacing = spacing
         self.max_wave_height_fair_weather = max_wave_height_fair_weather
         self.allow_storms = allow_storms
@@ -884,8 +1058,7 @@ class BarSim2D:
         self.max_width_backbarrier = max_width_backbarrier
         self.max_barrier_height_shoreface = max_barrier_height_shoreface
         self.max_barrier_height_backbarrier = max_barrier_height_backbarrier
-        self.preinterpolate_curves = preinterpolate_curves
-        self.monotonic = monotonic
+        self.curve_preinterpolation = curve_preinterpolation
         self.seed = seed
         
     def _preinterpolate_curves(self, run_time, dt_fair_weather, dt_storm):
@@ -899,18 +1072,18 @@ class BarSim2D:
         else:
             n_time_steps = math.ceil(run_time/dt_fair_weather) + 1
         
-        if self.monotonic == False:
-            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
-                                                      self.sea_level_curve[:, 1],
-                                                      kind='cubic')
-            sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[:, 0],
-                                                            self.sediment_supply_curve[:, 1],
-                                                            kind='cubic')
-        else:
+        if self.curve_preinterpolation == 'monotonic':
             sea_level_function = interpolate.PchipInterpolator(self.sea_level_curve[:, 0],
                                                                self.sea_level_curve[:, 1])
             sediment_supply_function = interpolate.PchipInterpolator(self.sediment_supply_curve[:, 0],
                                                                      self.sediment_supply_curve[:, 1])
+        else:
+            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
+                                                      self.sea_level_curve[:, 1],
+                                                      kind=self.curve_preinterpolation)
+            sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[:, 0],
+                                                            self.sediment_supply_curve[:, 1],
+                                                            kind=self.curve_preinterpolation)
             
         sea_level_interp = np.empty((n_time_steps, 2))
         sea_level_interp[:, 0] = np.linspace(0., run_time, n_time_steps)
@@ -939,7 +1112,7 @@ class BarSim2D:
         self : object
             Simulator with a `sequence_` attribute.
         """
-        if self.preinterpolate_curves == True:
+        if self.curve_preinterpolation is not None:
             sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(run_time, dt_fair_weather, dt_storm)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
@@ -979,12 +1152,12 @@ class BarSim2D:
                         'description': 'elevation through time',
                     }
                 ),
-                'Stratigraphy': (
+                'Deposits': (
                     ('Grain size', 'Time', 'X'),
                     stratigraphy,
                     {
                         'units': 'meter',
-                        'description': 'deposit thickness through time',
+                        'description': 'deposit thickness in time',
                     }
                 ),
                 'Facies': (
@@ -1009,6 +1182,250 @@ class BarSim2D:
         self.sequence_['Grain size'].attrs['units'] = 'micrometer'
 
         return self
+
+    def subsample(self, step):
+        """
+        Sub-samples the stratigraphy in time.
+
+        Parameters
+        ----------
+        step : int
+            Number of time steps to merge together. The last elevation is always
+            kept even if less than `step` steps remain.
+
+        Returns
+        -------
+        self : object
+            Simulator with a `subsequence_` attribute.
+        """
+        time, sea_level, sediment_supply, elevation, horizons, stratigraphy, facies = _subsample_stratigraphy(self.sequence_['Time'].values,
+                                                                                                              self.sequence_['Sea level'].values,
+                                                                                                              self.sequence_['Sediment supply'].values,
+                                                                                                              self.sequence_['Elevation'].values,
+                                                                                                              self.sequence_['Horizons'].values,
+                                                                                                              self.sequence_['Deposits'].values,
+                                                                                                              self.sequence_['Facies'].values,
+                                                                                                              step)
+        self.subsequence_ = xr.Dataset(
+            data_vars={
+                'Sea level': (
+                    ('Time',),
+                    sea_level,
+                    {
+                        'units': 'meter', 'description': 'sea level through time',
+                    }
+                ),
+                'Sediment supply': (
+                    ('Time',),
+                    sediment_supply,
+                    {
+                        'units': 'cubic meter',
+                        'description': 'sediment supply through time',
+                    }
+                ),
+                'Elevation': (
+                    ('Time', 'X'),
+                    elevation,
+                    {
+                        'units': 'meter',
+                        'description': 'elevation through time',
+                    }
+                ),
+                'Horizons': (
+                    ('Time', 'X'),
+                    horizons,
+                    {
+                        'units': 'meter',
+                        'description': 'elevation of the horizons in the subsurface',
+                    }
+                ),
+                'Deposits': (
+                    ('Grain size', 'Time', 'X'),
+                    stratigraphy,
+                    {
+                        'units': 'meter',
+                        'description': 'deposit thickness in time',
+                    }
+                ),
+                'Facies': (
+                    ('Environment', 'Time', 'X'),
+                    facies,
+                    {
+                        'units': '',
+                        'description': 'facies through time: 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore',
+                    },
+                ),
+            },
+            coords={
+                'X': self.sequence_['X'].values,
+                'Time': time,
+                'Grain size': self.sediment_size,
+                'Environment': ['substratum', 'coastal plain', 'lagoon', 'barrier island', 'upper shoreface', 'lower shoreface', 'offshore'],
+            },
+        )
+        self.subsequence_['X'].attrs['units'] = 'meter'
+        self.subsequence_['Time'].attrs['units'] = 'year'
+        self.subsequence_['Grain size'].attrs['units'] = 'micrometer'
+
+        return self
+
+    def plot_subsequence(self,
+                         ax,
+                         var='Mean grain size',
+                         idx=None,
+                         mask_zeros=True,
+                         sub_var=None,
+                         sub_idx=None,
+                         sub_zero_extremity=True,
+                         strip_zero_neighbors=False,
+                         vmin=None,
+                         vmax=None,
+                         **kwargs):
+        """
+        Plot a variable of `subsequence_`.
+
+        Parameters
+        ----------
+        ax : matplotlib axes object
+            An axes of a figure on which to plot the grid.
+        var : str, default='Mean grain size'
+            The variable to plot as color.
+        idx : int, default=None
+            If the variable to plot has multiple values (e.g., `Deposits` has
+            multiple grain sizes), index of the value to plot.
+        mask_zeros : bool, default=True
+            If True, masks the zeros.
+        sub_var : str, default=None
+            The variable to condition value substitutions. If None, uses `var`.
+        sub_idx : int, default=None
+            If the conditioning variable has multiple values (e.g., `Deposits`
+            has multiple grain sizes), index of the value to use.
+        sub_zero_extremity : bool, default=True
+            If True, substitues cells with a value of zero in `cond_var` with
+            the value of a neighboring cell if one is non-zero. This is useful
+            at the extremities of clinoforms when plotting the `Mean grain size`
+            for instance.
+        strip_zero_neighbors : bool, default=True
+            If True, substitues the cells with a value of zero in `cond_var`
+            with a NaN if the neighboring cells have a value of zero as well.
+            This is useful when plotting the deposition time.
+        vmin : float, default=None
+            Minimum value to use when plotting the variable. If None, uses the
+            minimum value of the variable.
+        vmax : float, default=None
+            Maximum value to use when plotting the variable. If None, uses the
+            maximum value of the variable.
+        **kwargs : `matplotlib.axes.Axes.pcolormesh` properties
+            Other keyword arguments are pcolormesh properties, see
+            `matplotlib.axes.Axes.pcolormesh` for a list of valid properties.
+
+        Returns
+        -------
+        self : list
+            List of meshes that constitute the grid.
+        """
+        if sub_var is None:
+            sub_var = var
+            sub_idx = idx
+        vmin = np.nanmin(self.subsequence_[var].values[idx, 1:, :-1]) if vmin is None and 'norm' not in kwargs else vmin
+        vmax = np.nanmax(self.subsequence_[var].values[idx, 1:, :-1]) if vmax is None and 'norm' not in kwargs else vmax
+
+        c = []
+        for i in range(1, self.subsequence_['Horizons'].shape[0]):
+            layer = self.subsequence_[var].values[idx, i, :-1].squeeze()
+            sub_layer = self.subsequence_[sub_var].values[sub_idx, i, :-1].squeeze()
+            if sub_zero_extremity == True:
+                layer = _sub_zero_extremity(layer, sub_layer)
+            if strip_zero_neighbors == True:
+                layer = _strip_zero_neighbors(layer, sub_layer)
+            if mask_zeros == True:
+                layer = np.ma.masked_where(layer == 0., layer)
+            ci = ax.pcolormesh(np.tile(self.subsequence_['X'].values[:-1], (2, 1)).T,
+                               self.subsequence_['Horizons'].values[i - 1:i + 1, :-1].T,
+                               np.tile(layer, (2, 1)).T,
+                               shading='gouraud',
+                               vmin=vmin,
+                               vmax=vmax,
+                               **kwargs)
+            c.append(ci)
+
+        return c
+
+    def plot_well(self,
+                  ax,
+                  u,
+                  on='sequence',
+                  var='Mean grain size',
+                  idx=None,
+                  cmap='viridis',
+                  norm=None,
+                  vmin=None,
+                  vmax=None,
+                  **kwargs):
+        """
+        Plot the mean grain size of each layers along depth as if a vertical
+        well was extracted from the stratigraphy.
+
+        Parameters
+        ----------
+        ax : matplotlib axes object
+            An axes of a figure on which to plot the grid.
+        u : int
+            Index along the x direction to extract the well.
+        on : str, default='subsequence'
+            Attribute to plot, either `sequence` or `subsequence`.
+        var : str, default='Mean grain size'
+            The variable to plot as color.
+        idx : int, default=None
+            If the variable to plot as color has multiple values (e.g., `Deposits`
+            has multiple grain sizes), index of the value to plot.
+        cmap : str or Colormap, default='viridis'
+            The Colormap instance or registered colormap name used to map scalar
+            data to colors.
+        norm : str or Normalize, default=None
+            The normalization method used to scale scalar data to the [0, 1]
+            range before mapping to colors using cmap. By default, a linear
+            scaling is used, mapping the lowest value to 0 and the highest to 1.
+        vmin : float, default=None
+            Minimum value to use when plotting the variable. If None, uses the
+            minimum value of the variable.
+        vmax : float, default=None
+            Maximum value to use when plotting the variable. If None, uses the
+            maximum value of the variable.
+        **kwargs : `matplotlib.axes.Axes.barh` properties
+            Other keyword arguments are barh properties, see
+            `matplotlib.axes.Axes.barh` for a list of valid properties.
+
+        Returns
+        -------
+        self : list
+            List of meshes that constitute the grid.
+        """
+        if on == 'subsequence':
+            dataset = self.subsequence_
+        elif on == 'sequence':
+            dataset = self.sequence_
+        else:
+            raise ValueError("Wrong value for parameter `on`, it should be 'sequence' or 'subsequence'.")
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap)
+        if norm is None:
+            norm = Normalize(vmin=vmin, vmax=vmax)
+
+        is_valid = dataset['Mean grain size'].values[:, u] > 0.
+        thickness = dataset['Horizons'][:, u][is_valid][1:].values - dataset['Horizons'][:, u][is_valid][:-1].values
+        rbg = cmap(norm(dataset[var].values[idx, :, u].squeeze()[is_valid][:-1]))
+        p = ax.barh(dataset['Horizons'][:, u][is_valid][:-1],
+                    dataset['Mean grain size'].values[:, u][is_valid][:-1],
+                    height=thickness,
+                    align='edge',
+                    color=rbg,
+                    **kwargs)
+
+        sm = ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+
+        return p, sm
         
     def regrid(self, z_min, z_max, dz):
         """
@@ -1028,13 +1445,13 @@ class BarSim2D:
         self : object
             Simulator with a `record_` attribute.
         """
-        stratigraphy, facies = _regrid_stratigraphy(self.sequence_['Elevation'][-1].to_numpy(),
-                                                    self.sequence_['Stratigraphy'].to_numpy(),
-                                                    self.sequence_['Facies'].to_numpy(),
+        stratigraphy, facies = _regrid_stratigraphy(self.sequence_['Elevation'][-1].values,
+                                                    self.sequence_['Deposits'].values,
+                                                    self.sequence_['Facies'].values,
                                                     z_min, z_max, dz)
         self.record_ = xr.Dataset(
             data_vars={
-                'Stratigraphy': (
+                'Deposits': (
                     ('Grain size', 'Z', 'X'),
                     stratigraphy/dz,
                     {
@@ -1068,52 +1485,39 @@ class BarSim2D:
 
         return self
         
-    def summarize(self, on_record=True, to_phi=True):
+    def finalize(self, on='all', to_phi=True):
         """
-        Summarizes the grain-size distribution and facies.
+        Finalizes the simulation by computing the mean grain size, the sorting
+        term, the horizons on `sequence_`, and major facies on `subsequence_`
+        and `record_`.
 
         Parameters
         ----------
-        on_record : bool, default=True
-            If true, summarizes self.record_, otherwise summarizes self.sequence_.
+        on : str, default='all'
+            Attribute to finalize, either `all`, `sequence`, `subsequence`, or
+            `record`.
         to_phi : bool, default=True
-            If true, computes the sorting term in phi unit, otherwise computes the
-            sorting term in micrometer.
+            If true, computes the sorting term in phi unit, otherwise computes
+            the sorting term in micrometer.
 
         Returns
         -------
         self : object
-            Simulator with extra variables in the `sequence_` or `record_` attribute.
+            Simulator with extra variables in the `sequence_`, 'subsequence_', or
+            `record_` attribute.
         """
-        if on_record == True:
-            dataset = self.record_
-        else:
-            dataset = self.sequence_
+        if on not in ('all', 'sequence', 'subsequence', 'record'):
+            raise ValueError("Wrong value for parameter `on`, it should be 'all', 'sequence', 'subsequence', or 'record'.")
 
-        dataset['Mean grain size'] = (
-            ('Z', 'X'),
-            _compute_mean_grain_size(dataset['Stratigraphy'].to_numpy(), dataset['Grain size'].to_numpy()),
-            {
-                'units': 'micrometer',
-                'description': 'mean of the grain-size distribution'
-            },
-        )
-        dataset['Sorting term'] = (
-            ('Z', 'X'),
-            _compute_std_grain_size(dataset['Stratigraphy'].to_numpy(), dataset['Grain size'].to_numpy(), to_phi),
-            {
-                'units': 'phi' if to_phi == True else 'micrometer',
-                'description': 'standard deviation of the grain-size distribution'
-            },
-        )
-        dataset['Major facies'] = (
-            ('Z', 'X'),
-            np.argmax(dataset['Facies'].to_numpy(), axis=0),
-            {
-                'units': '',
-                'description': 'major facies: 0. none, 1. substratum, 2. coastal plain, 3. lagoon, 4. barrier island, 5. upper shoreface, 6. lower shoreface, 7. offshore'
-            },
-        )
+        if hasattr(self, 'sequence_') and (on == 'all' or on == 'sequence'):
+            self.sequence_ = _finalize_elevation(self.sequence_)
+            self.sequence_ = _finalize_stratigraphy(self.sequence_, 'Time', to_phi)
+        if hasattr(self, 'subsequence_') and (on == 'all' or on == 'subsequence'):
+            self.subsequence_ = _finalize_stratigraphy(self.subsequence_, 'Time', to_phi)
+            self.subsequence_ = _finalize_facies(self.subsequence_, 'Time')
+        if hasattr(self, 'record_') and (on == 'all' or on == 'record'):
+            self.record_ = _finalize_stratigraphy(self.record_, 'Z', to_phi)
+            self.record_ = _finalize_facies(self.record_, 'Z')
 
         return self
 
@@ -1121,7 +1525,7 @@ class BarSim2D:
 ################################################################################
 # BarSim 2.5D
 
-@nb.jit(nopython=True, parallel=True)
+@nb.njit(parallel=True)
 def _run_multiple(initial_elevation, sea_level_curve, sediment_supply_curve, spacing,
                   run_time, dt_fair_weather, dt_storm, max_wave_height_fair_weather, allow_storms,
                   start_with_storm, max_wave_height_storm, tidal_amplitude,
@@ -1158,8 +1562,8 @@ def _run_multiple(initial_elevation, sea_level_curve, sediment_supply_curve, spa
     return stratigraphy, facies
 
 
-@nb.jit(nopython=True, parallel=True)
-def _summarize_multiple(stratigraphy, facies, grain_size, to_phi):
+@nb.njit(parallel=True)
+def _finalize_multiple(stratigraphy, facies, grain_size, to_phi):
     
     mean = np.empty(stratigraphy.shape[1:])
     std = np.empty(stratigraphy.shape[1:])
@@ -1180,12 +1584,14 @@ class BarSimPseudo3D:
 
     Parameters
     ----------
-    initial_elevation : array-like of shape (n_y, n_x)
+    initial_elevation : array-like of shape (n_x, n_y)
         The initial elevation (m).
-    sea_level_curve : array-like of shape (n_t, 2)
-        The inflection points of relative sea level in time (yr, m).
-    sediment_supply_curve : array-like of shape (n_t, 2)
-        The inflection points of sediment supply in time (yr, m2/yr).
+    sea_level_curve : float or array-like of shape (n_t, 2)
+        The inflection points of relative sea level in time (yr, m) or a constant
+        value of relative sea level (m).
+    sediment_supply_curve : array-like of shape (n_y, n_t, 2)
+        The inflection points of sediment supply in time (yr, m2/yr), which can
+        vary along the y direction.
     spacing : array-like of shape (2,), default=(100., 100.)
         The grid spatial resolution (m).
     max_wave_height_fair_weather : float, default=1.5
@@ -1244,10 +1650,10 @@ class BarSimPseudo3D:
         backbarrier.
     fallout_rate_backbarrier : float, default=0.
         Constant fall-out rate of fines (the finest sediment fraction only) in the
-        backbarrier area (mm/yr). Is only active during fair-weather conditions.
+        backbarrier area (m/yr). Is only active during fair-weather conditions.
     fallout_rate_shoreface : float, default=0.0002
         Constant fall-out rate of fines (the finest sediment fraction only) in the
-        shoreface-shelf (mm/yr), representing pelagic sedimentation. It is only
+        shoreface-shelf (m/yr), representing pelagic sedimentation. It is only
         active during fair-weather conditions.
     max_width_backbarrier : float, default=500.
         Maximum width of the backbarrier (m).
@@ -1261,18 +1667,18 @@ class BarSimPseudo3D:
         elevations above sea level limit the deposition. The parameter refers to
         z_l in equation 9 in Storms et al. (2002). This is a sensitive parameter,
         better keep the default value.
-    preinterpolate_curves: bool, default=False
-        If True, pre-interpolates the sea level and sediment supply curves.
-    monotonic: bool, default=True
-        If True, uses a monotonic interpolation for sea level and sediment supply,
-        otherwise uses a cubic interpolation.
+    curve_preinterpolation: str, default=None
+        If not None, pre-interpolates the sea level and sediment supply curves.
+        The value determines the type of interpolation used, either ‘linear’,
+        ‘nearest’, ‘nearest-up’, ‘zero’, ‘slinear’, ‘quadratic’, ‘cubic’,
+        ‘previous’, ‘next’, or `monotonic`.
     seed : int, default=42
         Controls random number generation for reproducibility.
 
     Attributes
     ----------
-    sequence_ : xarray.Dataset
-        Dataset containing the evolution of the elevation and stratigraphy through time.
+    record_ : xarray.Dataset
+        Dataset containing the final stratigraphy interpolated onto a regular grid.
         
     References
     ----------
@@ -1307,12 +1713,14 @@ class BarSimPseudo3D:
                  max_width_backbarrier=500.,
                  max_barrier_height_shoreface=1.,
                  max_barrier_height_backbarrier=1.,
-                 preinterpolate_curves=False,
-                 monotonic=True,
+                 curve_preinterpolation=None,
                  seed=42):
         
         self.initial_elevation = np.asarray(initial_elevation)
-        self.sea_level_curve = np.asarray(sea_level_curve)
+        if isinstance(sea_level_curve, (int, float)):
+            self.sea_level_curve = np.array([(0., sea_level_curve)])
+        else:
+            self.sea_level_curve = np.asarray(sea_level_curve)
         self.sediment_supply_curve = np.asarray(sediment_supply_curve)
         self.spacing = spacing
         self.max_wave_height_fair_weather = max_wave_height_fair_weather
@@ -1342,8 +1750,7 @@ class BarSimPseudo3D:
         self.max_width_backbarrier = max_width_backbarrier
         self.max_barrier_height_shoreface = max_barrier_height_shoreface
         self.max_barrier_height_backbarrier = max_barrier_height_backbarrier
-        self.preinterpolate_curves = preinterpolate_curves
-        self.monotonic = monotonic
+        self.curve_preinterpolation = curve_preinterpolation
         self.seed = seed
         
     def _preinterpolate_curves(self, run_time, dt_fair_weather, dt_storm):
@@ -1357,26 +1764,26 @@ class BarSimPseudo3D:
         else:
             n_time_steps = math.ceil(run_time/dt_fair_weather) + 1
         
-        if self.monotonic == False:
-            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
-                                                      self.sea_level_curve[:, 1],
-                                                      kind='cubic')
-        else:
+        if self.curve_preinterpolation == 'monotonic':
             sea_level_function = interpolate.PchipInterpolator(self.sea_level_curve[:, 0],
                                                                self.sea_level_curve[:, 1])
+        else:
+            sea_level_function = interpolate.interp1d(self.sea_level_curve[:, 0],
+                                                      self.sea_level_curve[:, 1],
+                                                      kind=self.curve_preinterpolation)
         sea_level_interp = np.empty((n_time_steps, 2))
         sea_level_interp[:, 0] = np.linspace(0., run_time, n_time_steps)
         sea_level_interp[:, 1] = sea_level_function(sea_level_interp[:, 0])
         
         sediment_supply_interp = np.empty((len(self.sediment_supply_curve), n_time_steps, 2))
         for i in range(len(self.sediment_supply_curve)):
-            if self.monotonic == False:
-                sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[i, :, 0],
-                                                                self.sediment_supply_curve[i, :, 1],
-                                                                kind='cubic')
-            else:
+            if self.curve_preinterpolation == 'monotonic':
                 sediment_supply_function = interpolate.PchipInterpolator(self.sediment_supply_curve[i, :, 0],
                                                                          self.sediment_supply_curve[i, :, 1])
+            else:
+                sediment_supply_function = interpolate.interp1d(self.sediment_supply_curve[i, :, 0],
+                                                                self.sediment_supply_curve[i, :, 1],
+                                                                kind=self.curve_preinterpolation)
             sediment_supply_interp[i, :, 0] = sea_level_interp[:, 0]
             sediment_supply_interp[i, :, 1] = sediment_supply_function(sediment_supply_interp[i, :, 0])
         
@@ -1406,7 +1813,7 @@ class BarSimPseudo3D:
         self : object
             Simulator with a `record_` attribute.
         """
-        if self.preinterpolate_curves == True:
+        if self.curve_preinterpolation is not None:
             sea_level_curve, sediment_supply_curve = self._preinterpolate_curves(run_time, dt_fair_weather, dt_storm)
         else:
             sea_level_curve, sediment_supply_curve = self.sea_level_curve, self.sediment_supply_curve
@@ -1424,7 +1831,7 @@ class BarSimPseudo3D:
                                              z_min, z_max, dz, self.seed)
         self.record_ = xr.Dataset(
             data_vars={
-                'Stratigraphy': (
+                'Deposits': (
                     ('Grain size', 'Z', 'Y', 'X'),
                     stratigraphy/dz,
                     {'units': '-', 'description': 'fraction of each grain size in a cell'},
@@ -1456,9 +1863,10 @@ class BarSimPseudo3D:
 
         return self
         
-    def summarize(self, to_phi=True):
+    def finalize(self, to_phi=True):
         """
-        Summarizes the grain-size distribution and facies.
+        Finalizes the simulation by computing the mean grain size, sorting term,
+        and major facies.
 
         Parameters
         ----------
@@ -1471,10 +1879,10 @@ class BarSimPseudo3D:
         self : object
             Simulator with extra variables in the `record_` attribute.
         """
-        mean, std, major_facies = _summarize_multiple(self.record_['Stratigraphy'].to_numpy(),
-                                                      self.record_['Facies'].to_numpy(),
-                                                      self.record_['Grain size'].to_numpy(),
-                                                      to_phi)
+        mean, std, major_facies = _finalize_multiple(self.record_['Deposits'].values,
+                                                     self.record_['Facies'].values,
+                                                     self.record_['Grain size'].values,
+                                                     to_phi)
 
         self.record_['Mean grain size'] = (
             ('Z', 'Y', 'X'),
@@ -1517,22 +1925,22 @@ class BarSimPseudo3D:
         mesh : pyvista.StructuredGrid
             The mesh.
         """
-        x = self.record_['X'].to_numpy().copy()
+        x = self.record_['X'].values.copy()
         x -= (x[1] - x[0])/2.
         x = np.append(x, x[-1] + (x[1] - x[0]))
-        y = self.record_['Y'].to_numpy().copy()
+        y = self.record_['Y'].values.copy()
         y -= (y[1] - y[0])/2.
         y = np.append(y, y[-1] + (y[1] - y[0]))
-        z = self.record_['Z'].to_numpy().copy()
+        z = self.record_['Z'].values.copy()
         z -= (z[1] - z[0])/2.
         z = np.append(z, z[-1] + (z[1] - z[0]))
         xx, yy, zz = np.meshgrid(x, y, zscale*z, indexing='ij')
 
         mesh = pv.StructuredGrid(xx, yy, zz)
-        median = self.record_['Mean grain size'].to_numpy().copy()
+        median = self.record_['Mean grain size'].values.copy()
         median[(self.record_['Facies'][0] == 1) | (self.record_['Facies'][1] == 1)] = np.nan
         mesh['Mean grain size'] = median.ravel()
-        major_facies = self.record_['Major facies'].to_numpy().astype(float)
+        major_facies = self.record_['Major facies'].values.astype(float)
         major_facies[(self.record_['Facies'][0] > 0) | (self.record_['Facies'][1] > 0)] = np.nan
         mesh['Major facies'] = major_facies.ravel()
         
