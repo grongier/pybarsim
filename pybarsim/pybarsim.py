@@ -1244,7 +1244,7 @@ class BarSim2D:
                     stratigraphy,
                     {
                         'units': 'meter',
-                        'description': 'deposit thickness in time',
+                        'description': 'deposit thickness for each grain size in time',
                     }
                 ),
                 'Facies': (
@@ -1453,10 +1453,10 @@ class BarSim2D:
             data_vars={
                 'Deposits': (
                     ('Grain size', 'Z', 'X'),
-                    stratigraphy/dz,
+                    stratigraphy,
                     {
-                        'units': '-',
-                        'description': 'fraction of each grain size in a cell',
+                        'units': 'meter',
+                        'description': 'deposit thickness for each grain size in a cell',
                     },
                 ),
                 'Facies': (
