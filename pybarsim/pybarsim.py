@@ -935,7 +935,7 @@ class BarSim2D:
         Fraction of the sand-prone grain-size class available for tide-induced
         transport. This rule ensures that tide-induced transport is focused on
         the fine-grained fractions by limiting the sand-sized grain-size
-        fraction. NOTE that the correct grain-size class is limited! It must be
+        fraction. Note that the correct grain-size class is limited! It must be
         between 0 and 1.
     depth_factor_backbarrier : float, default=5.
         Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
@@ -972,9 +972,9 @@ class BarSim2D:
         better keep the default value.
     curve_preinterpolation: str, default=None
         If not None, pre-interpolates the sea level and sediment supply curves.
-        The value determines the type of interpolation used, either ‘linear’,
-        ‘nearest’, ‘nearest-up’, ‘zero’, ‘slinear’, ‘quadratic’, ‘cubic’,
-        ‘previous’, ‘next’, or `monotonic`.
+        The value determines the type of interpolation used, either `linear`,
+        `nearest`, `nearest-up`, `zero`, `slinear`, `quadratic`, `cubic`,
+        `previous`, `next`, or `monotonic`.
     seed : int, default=42
         Controls random number generation for reproducibility.
 
@@ -1632,7 +1632,7 @@ class BarSimPseudo3D:
         Fraction of the sand-prone grain-size class available for tide-induced
         transport. This rule ensures that tide-induced transport is focused on
         the fine-grained fractions by limiting the sand-sized grain-size
-        fraction. NOTE that the correct grain-size class is limited! It must be
+        fraction. Note that the correct grain-size class is limited! It must be
         between 0 and 1.
     depth_factor_backbarrier : float, default=5.
         Parameter `A` in equation 9 (Storms et al., 2002) applied to backbarrier
@@ -1669,9 +1669,9 @@ class BarSimPseudo3D:
         better keep the default value.
     curve_preinterpolation: str, default=None
         If not None, pre-interpolates the sea level and sediment supply curves.
-        The value determines the type of interpolation used, either ‘linear’,
-        ‘nearest’, ‘nearest-up’, ‘zero’, ‘slinear’, ‘quadratic’, ‘cubic’,
-        ‘previous’, ‘next’, or `monotonic`.
+        The value determines the type of interpolation used, either `linear`,
+        `nearest`, `nearest-up`, `zero`, `slinear`, `quadratic`, `cubic`,
+        `previous`, `next`, or `monotonic`.
     seed : int, default=42
         Controls random number generation for reproducibility.
 
