@@ -29,7 +29,6 @@
 
 # Always prefer setuptools over distutils
 from setuptools import setup, find_packages
-from os import path
 
 
 # Get the long description from the README file
@@ -38,7 +37,7 @@ with open('README.md') as f:
 
 setup(
     name='pyBarSim',
-    version='v0.0.3',
+    version='v0.1.0',
     description='Python package to simulate wave-dominated shallow-marine environments',
     long_description=long_description,
     long_description_content_type='text/markdown',
@@ -59,9 +58,9 @@ setup(
     keywords='stratigraphic modeling, shallow-marine, event-based',
     packages=find_packages(),
     python_requires=">=3.7",
-    install_requires=['numpy', 'scipy', 'numba', 'xarray', 'matplotlib', 'pyvista'],
-    project_urls={  # Optional
+    install_requires=['numpy', 'scipy', 'numba', 'xarray', 'matplotlib'],
+    project_urls={
         'Reference': 'https://doi.org/10.1016/S0025-3227(03)00144-0',
-        'Source': 'https://gitlab.tudelft.nl/grongier/pybarsim',
+        'Source': 'https://github.com/grongier/pybarsim',
     },
 )
