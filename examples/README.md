@@ -1,4 +1,4 @@
-# How to pick pyBarSim's parameters?
+# How to pick pyBarSim's key parameters?
 
 **Author:** Andrea Cuesta Cano
 
